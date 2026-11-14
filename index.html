@@ -760,63 +760,62 @@ function auditTeam(sc, clubTeamId) {
   const oppInningsCount = playedInnings.length - ourInningsCount;
   /* Terms with a zero value are left out of a breakdown, except the first (which anchors the sentence). */
   const sumText = terms => terms.filter((t, i) => i === 0 || t.v).map(t => t.k + " " + t.v).join(" + ");
+  const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
   for (const inn of (sc.innings || [])) {
     const batting = inn.batting || [], bowling = inn.bowling || [], fielding = inn.fielding || [];
     const total = num(inn.runsScored);
     if (!isPlayedInnings(inn)) continue; /* an innings that never started */
-    const label = (inn.battingTeamId === clubTeamId ? ourInningsCount : oppInningsCount) > 1
-      ? ordinal(num(inn.inningsNumber) || 1) + " innings" : "innings";
+    const mine = inn.battingTeamId === clubTeamId;
+    /* "1st"/"2nd" only when a side batted more than once (a multi-day match); otherwise the tag (Batting, Fielding, ...)
+       already says enough that "Our innings:" / "Opponents' innings:" would just repeat it, so it's left off. */
+    const count = mine ? ourInningsCount : oppInningsCount;
+    const prefix = count > 1 ? (mine ? "Our " : "Opponents' ") + ordinal(num(inn.inningsNumber) || 1) + " innings: " : "";
+    const note = (type, text) => add(type, prefix ? prefix + text : cap(text));
     const b = num(inn.byesRuns), lb = num(inn.legByesRuns), w = num(inn.wideBalls), nb = num(inn.noBalls), pen = num(inn.penalties);
-    if (inn.battingTeamId === clubTeamId) {
+    if (mine) {
       /* our batting */
       const bat = batting.reduce((a, x) => a + num(x.runsScored), 0);
       const sum = bat + b + lb + w + nb + pen;
       if (sum !== total) {
-        add("batting", "Our " + label + ": " + sumText([
+        note("batting", sumText([
           { k: "batters' runs", v: bat }, { k: "byes", v: b }, { k: "leg byes", v: lb }, { k: "wides", v: w }, { k: "no balls", v: nb }, { k: "penalties", v: pen }
         ]) + " = " + sum + ", but the innings total is " + total + " (" + Math.abs(total - sum) + (sum < total ? " missing" : " too many") + ").");
       }
-      for (const x of batting) if (isHiddenName(x.playerShortName)) add("names", "Our " + label + ": a batter's name is hidden (shown as \"" + (String(x.playerShortName || "").trim() || "blank") + "\").");
+      for (const x of batting) if (isHiddenName(x.playerShortName)) note("names", "a batter's name is hidden (shown as \"" + (String(x.playerShortName || "").trim() || "blank") + "\").");
     } else {
       /* opponents batting: our bowling and fielding */
       const conceded = bowling.reduce((a, x) => a + num(x.runsConceded), 0);
       const sum = conceded + b + lb + pen;
       if (sum !== total) {
-        add("bowling", "Opponents' " + label + ": " + sumText([
+        note("bowling", sumText([
           { k: "our bowlers' runs", v: conceded }, { k: "byes", v: b }, { k: "leg byes", v: lb }, { k: "penalties", v: pen }
         ]) + " = " + sum + ", but the innings total is " + total + " (" + Math.abs(total - sum) + (sum < total ? " missing" : " too many") + ").");
       }
-      for (const x of bowling) if (isHiddenName(x.playerShortName)) add("names", "Opponents' " + label + ": a bowler's name is hidden (shown as \"" + (String(x.playerShortName || "").trim() || "blank") + "\").");
-      /* A blank fielder in the opponents' batting card only matters when the credit is also missing from our players. */
-      const blank = { caught: [], stumped: [], runOut: [] };
+      for (const x of bowling) if (isHiddenName(x.playerShortName)) note("names", "a bowler's name is hidden (shown as \"" + (String(x.playerShortName || "").trim() || "blank") + "\").");
       let caught = 0, stumped = 0, runOut = 0;
       for (const x of batting) {
-        const type = String(x.dismissalType || ""), text = String(x.dismissalText || "");
-        const who = x.playerShortName || "a batter";
-        if (/caught/i.test(type)) {
-          caught++;
-          const m = text.match(/^c\s*&\s*b:\s*(.*)$/i) || text.match(/^c:\s*(.*?)\s*b:/i);
-          if (m && !m[1].trim()) blank.caught.push("Opponents' " + label + ": " + who + " was caught but no catcher is recorded (\"" + text.trim() + "\").");
-        } else if (/stump/i.test(type)) {
-          stumped++;
-          const m = text.match(/^st:\s*(.*?)\s*b:/i);
-          if (m && !m[1].trim()) blank.stumped.push("Opponents' " + label + ": " + who + " was stumped but no wicketkeeper is recorded (\"" + text.trim() + "\").");
-        } else if (/run out/i.test(type)) {
-          runOut++;
-          const m = text.match(/\(([^)]*)\)/);
-          if (!m || !m[1].trim()) blank.runOut.push("Opponents' " + label + ": " + who + " was run out but no fielder is recorded.");
-        }
+        const type = String(x.dismissalType || "");
+        if (/caught/i.test(type)) caught++;
+        else if (/stump/i.test(type)) stumped++;
+        else if (/run out/i.test(type)) runOut++;
       }
-      const mine = fielding.filter(f => !ourIds.size || ourIds.has(f.participantId));
-      const cc = mine.reduce((a, f) => a + num(f.totalCatches != null ? f.totalCatches : num(f.catches) + num(f.wicketKeeperCatches)), 0);
-      const cs = mine.reduce((a, f) => a + num(f.stumpings), 0);
-      const cr = mine.reduce((a, f) => a + num(f.runOuts), 0);
-      const withRO = mine.filter(f => num(f.runOuts) > 0).length;
-      if (cc !== caught) add("fielding", "Opponents' " + label + ": " + caught + " caught in the scorecard, but " + cc + (cc === 1 ? " catch is" : " catches are") + " credited to our fielders.");
-      if (cs !== stumped) add("fielding", "Opponents' " + label + ": " + stumped + " stumped in the scorecard, but " + cs + (cs === 1 ? " stumping is" : " stumpings are") + " credited to our players.");
-      /* an assisted run out credits two fielders, so more credits than run outs is normal */
-      if (cr < runOut || (runOut === 0 && withRO > 0)) add("fielding", "Opponents' " + label + ": " + runOut + " run out in the scorecard, but " + cr + (cr === 1 ? " run out is" : " run outs are") + " credited to our fielders.");
-      for (const f of mine) if (isHiddenName(f.playerShortName)) add("names", "Opponents' " + label + ": a fielder's name is hidden (shown as \"" + (String(f.playerShortName || "").trim() || "blank") + "\").");
+      const mineFielders = fielding.filter(f => !ourIds.size || ourIds.has(f.participantId));
+      const cc = mineFielders.reduce((a, f) => a + num(f.totalCatches != null ? f.totalCatches : num(f.catches) + num(f.wicketKeeperCatches)), 0);
+      const cs = mineFielders.reduce((a, f) => a + num(f.stumpings), 0);
+      const cr = mineFielders.reduce((a, f) => a + num(f.runOuts), 0);
+      const withRO = mineFielders.filter(f => num(f.runOuts) > 0).length;
+      /* Catches, stumpings and run outs are only known from how the opponents entered their own batting card (who got out,
+         and how). When that card is blank, there's nothing to credit on either side, so the usual checks below stay quiet
+         (0 matches 0) even though nothing has actually been verified - this note says so instead of going silent. */
+      if (!batting.length && !cc && !cs && !cr) {
+        note("fielding", "no fielding credits, however opponents' scores are not entered to verify.");
+      } else {
+        if (cc !== caught) note("fielding", caught + " caught in the scorecard, but " + cc + (cc === 1 ? " catch is" : " catches are") + " credited to our fielders.");
+        if (cs !== stumped) note("fielding", stumped + " stumped in the scorecard, but " + cs + (cs === 1 ? " stumping is" : " stumpings are") + " credited to our players.");
+        /* an assisted run out credits two fielders, so more credits than run outs is normal */
+        if (cr < runOut || (runOut === 0 && withRO > 0)) note("fielding", runOut + " run out in the scorecard, but " + cr + (cr === 1 ? " run out is" : " run outs are") + " credited to our fielders.");
+      }
+      for (const f of mineFielders) if (isHiddenName(f.playerShortName)) note("names", "a fielder's name is hidden (shown as \"" + (String(f.playerShortName || "").trim() || "blank") + "\").");
     }
   }
   return issues;
