@@ -750,20 +750,31 @@ function auditTeam(sc, clubTeamId) {
   if ((us.players || []).length && !(us.players || []).some(p => (p.roles || []).some(r => /keeper/i.test(r)))) {
     add("keeper", "No wicketkeeper is marked in the team sheet.");
   }
+  /* Only numbered "1st", "2nd" when a side batted more than once (a multi-day match); a single innings each needs no number. */
+  const isPlayedInnings = inn => {
+    const batting = inn.batting || [], bowling = inn.bowling || [];
+    return num(inn.runsScored) > 0 || num(inn.numberOfWicketsFallen) > 0 || batting.some(b => num(b.ballsFaced) > 0 || num(b.runsScored) > 0) || bowling.some(b => num(b.oversBowled) > 0);
+  };
+  const playedInnings = (sc.innings || []).filter(isPlayedInnings);
+  const ourInningsCount = playedInnings.filter(inn => inn.battingTeamId === clubTeamId).length;
+  const oppInningsCount = playedInnings.length - ourInningsCount;
+  /* Terms with a zero value are left out of a breakdown, except the first (which anchors the sentence). */
+  const sumText = terms => terms.filter((t, i) => i === 0 || t.v).map(t => t.k + " " + t.v).join(" + ");
   for (const inn of (sc.innings || [])) {
     const batting = inn.batting || [], bowling = inn.bowling || [], fielding = inn.fielding || [];
     const total = num(inn.runsScored);
-    const played = total > 0 || num(inn.numberOfWicketsFallen) > 0 || batting.some(b => num(b.ballsFaced) > 0 || num(b.runsScored) > 0) || bowling.some(b => num(b.oversBowled) > 0);
-    if (!played) continue; /* an innings that never started */
-    const label = ordinal(num(inn.inningsNumber) || 1) + " innings";
+    if (!isPlayedInnings(inn)) continue; /* an innings that never started */
+    const label = (inn.battingTeamId === clubTeamId ? ourInningsCount : oppInningsCount) > 1
+      ? ordinal(num(inn.inningsNumber) || 1) + " innings" : "innings";
     const b = num(inn.byesRuns), lb = num(inn.legByesRuns), w = num(inn.wideBalls), nb = num(inn.noBalls), pen = num(inn.penalties);
     if (inn.battingTeamId === clubTeamId) {
       /* our batting */
       const bat = batting.reduce((a, x) => a + num(x.runsScored), 0);
       const sum = bat + b + lb + w + nb + pen;
       if (sum !== total) {
-        add("batting", "Our " + label + ": batters' runs " + bat + " + byes " + b + " + leg byes " + lb + " + wides " + w + " + no balls " + nb + " + penalties " + pen +
-          " = " + sum + ", but the innings total is " + total + " (" + Math.abs(total - sum) + (sum < total ? " missing" : " too many") + ").");
+        add("batting", "Our " + label + ": " + sumText([
+          { k: "batters' runs", v: bat }, { k: "byes", v: b }, { k: "leg byes", v: lb }, { k: "wides", v: w }, { k: "no balls", v: nb }, { k: "penalties", v: pen }
+        ]) + " = " + sum + ", but the innings total is " + total + " (" + Math.abs(total - sum) + (sum < total ? " missing" : " too many") + ").");
       }
       for (const x of batting) if (isHiddenName(x.playerShortName)) add("names", "Our " + label + ": a batter's name is hidden (shown as \"" + (String(x.playerShortName || "").trim() || "blank") + "\").");
     } else {
@@ -771,8 +782,9 @@ function auditTeam(sc, clubTeamId) {
       const conceded = bowling.reduce((a, x) => a + num(x.runsConceded), 0);
       const sum = conceded + b + lb + pen;
       if (sum !== total) {
-        add("bowling", "Opponents' " + label + ": our bowlers' runs " + conceded + " + byes " + b + " + leg byes " + lb + " + penalties " + pen +
-          " = " + sum + ", but the innings total is " + total + " (" + Math.abs(total - sum) + (sum < total ? " missing" : " too many") + ").");
+        add("bowling", "Opponents' " + label + ": " + sumText([
+          { k: "our bowlers' runs", v: conceded }, { k: "byes", v: b }, { k: "leg byes", v: lb }, { k: "penalties", v: pen }
+        ]) + " = " + sum + ", but the innings total is " + total + " (" + Math.abs(total - sum) + (sum < total ? " missing" : " too many") + ").");
       }
       for (const x of bowling) if (isHiddenName(x.playerShortName)) add("names", "Opponents' " + label + ": a bowler's name is hidden (shown as \"" + (String(x.playerShortName || "").trim() || "blank") + "\").");
       /* A blank fielder in the opponents' batting card only matters when the credit is also missing from our players. */
