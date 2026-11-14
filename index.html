@@ -212,6 +212,7 @@ td.num { font-weight: 700; color: var(--heading); }
 .card .vs { color: var(--muted); font-size: 0.88rem; margin: -6px 0 0; }
 .issue { font-size: 0.92rem; }
 .issue .tag { display: inline-block; margin-right: 6px; padding: 0 7px; border-radius: 999px; background: var(--pill-bg); color: var(--pill-ink); font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+.issue .tag.status { background: #b3261e; color: #fff; }
 .tabs { overflow-x: auto; }
 .tab { white-space: nowrap; }
 .scores-panel { gap: 10px; }
@@ -395,7 +396,7 @@ td.num { font-weight: 700; color: var(--heading); }
     </div>
     <section class="block" aria-labelledby="h-audit">
       <h2 id="h-audit">Senior scorecard audit</h2>
-      <p class="blurb">Checks each senior team's scorecard for the club's most recently played round: that it's finalised in Play Cricket, batting and bowling totals add up, every catch, stumping and run out is credited to a fielder, and no player's name is hidden.</p>
+      <p class="blurb">Checks each senior team's scorecard for the club's most recently played round: that it's finalised in Play Cricket, a wicketkeeper is marked in the team sheet, batting and bowling totals add up, every catch, stumping and run out is credited to a fielder, and no player's name is hidden.</p>
       <div class="summary" id="a-summary">Loading the most recently played round…</div>
       <div class="grid xii-grid" id="a-grid"></div>
     </section>
@@ -490,10 +491,14 @@ function newestSeasons(seasons, now, n) {
     .sort((a, b) => parseDate(b.startDate) - parseDate(a.startDate))
     .slice(0, n);
 }
-/* Map(teamId -> label). The label is the grade the team plays in (for example "Senior B08"); it has .has() like a Set. */
+/* Map(teamId -> label). The label is the grade the team plays in (for example "Senior B08"); it has .has() like a Set.
+   Two of our teams can share one grade (team names "Seniors B13(Brown)" and "Seniors B13(Gold)" are both graded
+   "Senior B13"), so the label carries whatever is in brackets on the team's own name to tell them apart. */
 function gradeLabel(t) {
   const g = t.grade && t.grade.name ? t.grade.name : t.name;
-  return String(g || "").replace(/\s+/g, " ").trim();
+  const label = String(g || "").replace(/\s+/g, " ").trim();
+  const m = String(t.name || "").match(/\(([^)]+)\)\s*$/);
+  return m ? label + " " + m[1].trim() : label;
 }
 async function teamIdsFor(api, seasons) {
   const ids = new Map();
@@ -731,7 +736,7 @@ function isHiddenName(n) {
 }
 const ordinal = n => n + (n === 1 ? "st" : n === 2 ? "nd" : n === 3 ? "rd" : "th");
 /* Checks for one club team in one match. sc = scorecard with lower-case keys; clubTeamId = our team in it.
-   Returns [{ type: "batting" | "bowling" | "fielding" | "names", text }]. */
+   Returns [{ type: "batting" | "bowling" | "fielding" | "names" | "keeper", text }]. */
 function auditTeam(sc, clubTeamId) {
   const issues = [];
   const add = (type, text) => issues.push({ type, text });
@@ -741,6 +746,9 @@ function auditTeam(sc, clubTeamId) {
 
   for (const p of (us.players || [])) {
     if (isHiddenName(p.name)) add("names", "A player in the team list has a hidden name (shown as \"" + (String(p.name || "").trim() || "blank") + "\").");
+  }
+  if ((us.players || []).length && !(us.players || []).some(p => (p.roles || []).some(r => /keeper/i.test(r)))) {
+    add("keeper", "No wicketkeeper is marked in the team sheet.");
   }
   for (const inn of (sc.innings || [])) {
     const batting = inn.batting || [], bowling = inn.bowling || [], fielding = inn.fielding || [];
@@ -885,11 +893,9 @@ function shortClub(name) {
   do { prev = s; s = s.replace(/[\s,]+(incorporated|inc\.?|cricket club|sports club|sports)$/i, "").trim(); } while (s !== prev && s);
   return s || String(name || "").trim();
 }
-/* "Senior B13" with team "Seniors B13(Gold)" becomes "Senior B13 Gold", so two teams in one grade can be told apart. */
-function teamLabel(t) {
-  const m = String(t.name || "").match(/\(([^)]+)\)\s*$/);
-  return gradeLabel(t) + (m ? " " + m[1].trim() : "");
-}
+/* "Senior B13" with team "Seniors B13(Gold)" becomes "Senior B13 Gold", so two teams in one grade can be told apart;
+   gradeLabel already appends that suffix. */
+function teamLabel(t) { return gradeLabel(t); }
 /* Junior teams: everything that is neither a senior team nor the Sunday T20 side (boys' age groups and the girls' teams). */
 function isJuniorTeam(t) {
   const text = [t.name, t.grade && t.grade.name].filter(Boolean).join(" ");
@@ -1769,8 +1775,8 @@ $("x-copy").addEventListener("click", async e => {
 
 /* ---- Scorecard audit tab ---- */
 let audit = { state: "idle", data: null, at: null };
-const ISSUE_ORDER = ["status", "batting", "bowling", "fielding", "names"];
-const ISSUE_LABEL = { status: "Not final", batting: "Batting", bowling: "Bowling", fielding: "Fielding", names: "Names" };
+const ISSUE_ORDER = ["status", "keeper", "batting", "bowling", "fielding", "names"];
+const ISSUE_LABEL = { status: "Not final", keeper: "Keeper", batting: "Batting", bowling: "Bowling", fielding: "Fielding", names: "Names" };
 function sortedIssues(t) { return [...t.issues].sort((a, b) => ISSUE_ORDER.indexOf(a.type) - ISSUE_ORDER.indexOf(b.type)); }
 function renderAudit() {
   const sum = $("a-summary"), grid = $("a-grid");
@@ -1816,7 +1822,7 @@ function renderAudit() {
       for (const it of sortedIssues(t)) {
         const li = document.createElement("li"); li.className = "issue";
         const span = document.createElement("span");
-        const tag = document.createElement("span"); tag.className = "tag"; tag.textContent = ISSUE_LABEL[it.type];
+        const tag = document.createElement("span"); tag.className = "tag" + (it.type === "status" ? " status" : ""); tag.textContent = ISSUE_LABEL[it.type];
         span.append(tag, document.createTextNode(it.text));
         li.appendChild(span);
         ul.appendChild(li);
