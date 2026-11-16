@@ -278,7 +278,7 @@ td.num { font-weight: 700; color: var(--heading); }
   <div class="main">
   <section class="block" aria-labelledby="h-matches">
     <h2 id="h-matches">Matches</h2>
-    <p class="blurb">Players who played their 100th, 150th, 200th or 250th match for the club during the period.</p>
+    <p class="blurb">Players who played their 100th match for the club, or every 50th after that, during the period.</p>
     <div class="summary" id="m-summary">Checking matches…</div>
     <div class="seg" id="seg-matches" role="group" aria-label="Period for matches milestones">
       <button type="button" data-days="7" aria-pressed="true">Last 7 days</button>
@@ -290,7 +290,7 @@ td.num { font-weight: 700; color: var(--heading); }
 
   <section class="block" aria-labelledby="h-wickets">
     <h2 id="h-wickets">Wickets</h2>
-    <p class="blurb">Players whose career wickets went from below a milestone to 100, 150, 200, 250 or 300 or more during the period.</p>
+    <p class="blurb">Players whose career wickets went from below a milestone to 100 or more, or every 50 after that, during the period.</p>
     <div class="summary" id="w-summary">Checking wickets…</div>
     <div class="seg" id="seg-wickets" role="group" aria-label="Period for wickets milestones">
       <button type="button" data-days="7" aria-pressed="true">Last 7 days</button>
@@ -301,7 +301,7 @@ td.num { font-weight: 700; color: var(--heading); }
   </section>
   <section class="block" aria-labelledby="h-runs">
     <h2 id="h-runs">Runs</h2>
-    <p class="blurb">Players whose career runs went from below a milestone to 1,000, 1,500, 2,000 and so on up to 4,000 or more during the period.</p>
+    <p class="blurb">Players whose career runs went from below a milestone to 1,000 or more, or every 500 after that, during the period.</p>
     <div class="summary" id="r-summary">Checking runs…</div>
     <div class="seg" id="seg-runs" role="group" aria-label="Period for runs milestones">
       <button type="button" data-days="7" aria-pressed="true">Last 7 days</button>
@@ -413,25 +413,36 @@ const TEAM_MIN_SHARE = 0.25; /* ...and at least this share of the player's match
 const ACTIVE_DAYS = 240;     /* a player with no Cheetahs match in this many days is treated as dormant */
 
 /* Career statistics tracked for "crossed a milestone" and the watchlist.
+   start/step: milestones run start, start+step, start+2*step, ... with no upper limit - buildCrossData
+   fills in cfg.ms once it knows the highest total anyone has actually reached (see openMilestones).
    margin: only players up to this far above a milestone can have crossed it in a 4-week period.
    range: the watchlist covers players up to this far below a milestone. */
 const STATS = {
   matches: {
-    ms: [100, 150, 200, 250], margin: 12, range: 3, unit: "match", units: "matches", verb: "reached", page: "getMatchesPage",
+    start: 100, step: 50, ms: [], margin: 12, range: 3, unit: "match", units: "matches", verb: "reached", page: "getMatchesPage",
     total: p => p.statistics.matches,
     inMatch: () => 1
   },
   wickets: {
-    ms: [100, 150, 200, 250, 300], margin: 40, range: 5, unit: "wicket", units: "wickets", verb: "crossed", page: "getBowlPage",
+    start: 100, step: 50, ms: [], margin: 40, range: 5, unit: "wicket", units: "wickets", verb: "crossed", page: "getBowlPage",
     total: p => p.statistics.bowlingWickets,
     inMatch: m => (m.bowlingStatistics || []).reduce((a, b) => a + (b.wicketsTaken || 0), 0)
   },
   runs: {
-    ms: [1000, 1500, 2000, 2500, 3000, 3500, 4000], margin: 350, range: 50, unit: "run", units: "runs", verb: "crossed", page: "getBatPage",
+    start: 1000, step: 500, ms: [], margin: 350, range: 50, unit: "run", units: "runs", verb: "crossed", page: "getBatPage",
     total: p => p.statistics.battingAggregate,
     inMatch: m => (m.battingStatistics || []).reduce((a, b) => a + (b.runsScored || 0), 0)
   }
 };
+/* Milestones from `start` upward in `step` steps, extended one step past the highest total anyone has
+   actually reached so far - so the list (and the watchlist) grows on its own as players progress,
+   instead of stopping at a number someone picked in advance. */
+function openMilestones(start, step, maxValue) {
+  const top = Math.max(start, Math.ceil((maxValue + 1) / step) * step);
+  const out = [];
+  for (let m = start; m <= top; m += step) out.push(m);
+  return out;
+}
 
 function displayName(n) {
   const i = n.indexOf(",");
@@ -471,7 +482,7 @@ async function loadTotals(getPage, cfg) {
     if (!rows.length) break;
     for (const p of rows) map.set(p.id, { id: p.id, n: p.name, v: cfg.total(p) });
     const min = Math.min(...rows.map(cfg.total));
-    if (min < cfg.ms[0] - cfg.range || rows.length < 100) break;
+    if (min < cfg.start - cfg.range || rows.length < 100) break;
   }
   return [...map.values()];
 }
@@ -867,7 +878,9 @@ const NOT_STARTED = new Set(["UPCOMING", "PENDING", "SCHEDULED", "DRAFT", "POSTP
 function matchOutcome(m, us, them) {
   const status = String(m.status || "").toUpperCase();
   if (NOT_STARTED.has(status)) return "upcoming";
-  if (status !== "COMPLETED") return "progress"; /* stumps, live, innings break and so on */
+  /* An abandoned match is finished, not "in progress" - let it fall through to the result text below
+     (which says what actually happened, e.g. "Match drawn") instead of being caught here. */
+  if (status !== "COMPLETED" && status !== "ABANDONED") return "progress"; /* stumps, live, innings break and so on */
   if (us && us.isWinner) return "won";
   if (them && them.isWinner) return "lost";
   const code = String((us && us.resultTypeCode) || "").toUpperCase();
@@ -1349,6 +1362,7 @@ async function buildJuniorRecords(api) {
 /* api = { getMatchesPage(offset), getBowlPage(offset), getBatPage(offset), getSeasons(), getTeams(seasonId), getPerf(playerId, seasonId), getMatch(matchId) } */
 async function buildCrossData(api, now, cfg, onTotals) {
   const totals = await loadTotals(api[cfg.page], cfg);
+  cfg.ms = openMilestones(cfg.start, cfg.step, totals.reduce((a, p) => Math.max(a, p.v), 0));
   const watch = watchlist(totals, cfg.ms, p => p.n, p => p.v, cfg.range);
   if (onTotals) onTotals(watch);
   const cands = totals.filter(p => cfg.ms.some(M => p.v >= M && p.v <= M + cfg.margin));
@@ -1450,8 +1464,8 @@ let activity = { state: "loading", map: new Map() }; /* who has played for the c
 
 /* One entry per "reached a milestone" section. */
 const sections = [
-  { key: "matches", cfg: STATS.matches, showEmpty: true, ids: { summary: "m-summary", grid: "m-grid", seg: "seg-matches", watch: "watch-matches" } },
-  { key: "wickets", cfg: STATS.wickets, showEmpty: true, ids: { summary: "w-summary", grid: "w-grid", seg: "seg-wickets", watch: "watch-wickets" } },
+  { key: "matches", cfg: STATS.matches, showEmpty: false, ids: { summary: "m-summary", grid: "m-grid", seg: "seg-matches", watch: "watch-matches" } },
+  { key: "wickets", cfg: STATS.wickets, showEmpty: false, ids: { summary: "w-summary", grid: "w-grid", seg: "seg-wickets", watch: "watch-wickets" } },
   { key: "runs", cfg: STATS.runs, showEmpty: false, ids: { summary: "r-summary", grid: "r-grid", seg: "seg-runs", watch: "watch-runs" } }
 ].map(s => Object.assign(s, { days: 7, data: null, state: "loading", watch: null, now: new Date() }));
 
@@ -1682,7 +1696,12 @@ function gradeFor(kind, p) {
 }
 function xiiFigure(kind, p) {
   if (kind === "bat") return plural(p.runs, "run", "runs");
-  if (kind === "keep") return plural(p.kc, "catch", "catches") + ", " + plural(p.st, "stumping", "stumpings");
+  if (kind === "keep") {
+    const parts = [];
+    if (p.kc) parts.push(plural(p.kc, "catch", "catches"));
+    if (p.st) parts.push(plural(p.st, "stumping", "stumpings"));
+    return parts.length ? parts.join(", ") : "No dismissals yet";
+  }
   return p.wkts + " for " + p.conc;
 }
 function xiiRounds(r) {
