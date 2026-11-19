@@ -1,0 +1,6 @@
+name = "cheetahs-playhq-proxy"
+main = "index.js"
+compatibility_date = "2024-01-01"
+
+# PLAYHQ_API_KEY and PLAYHQ_TENANT are set as Worker secrets, not here -
+# see worker/README.md. Never put the key in this file or in version control.
