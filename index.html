@@ -352,30 +352,44 @@ td.num { font-weight: 700; color: var(--heading); }
     <div class="toolbar">
       <div class="actions"><button type="button" class="refresh" id="h-refresh">Refresh</button><button type="button" class="copy" id="h-copy">Copy list</button></div>
     </div>
+    <div class="seg" id="seg-hl" role="group" aria-label="Senior or junior highlights">
+      <button type="button" data-view="senior" aria-pressed="true">Senior</button>
+      <button type="button" data-view="junior" aria-pressed="false">Junior</button>
+    </div>
+    <div data-hl-view="senior">
     <section class="block" aria-labelledby="h-hl">
-      <h2 id="h-hl">Senior 50+ scores of the round</h2>
-      <p class="blurb">Every senior player who scored 50 or more in a single innings in the club's most recently played round, highest grade first, then highest score. A two-day match can give a player two innings, and each 50 is listed.</p>
+      <h2 id="h-hl">Senior 50 to 99 scores of the round</h2>
+      <p class="blurb">Every senior player who scored 50 to 99 in a single innings in the club's most recently played round, highest grade first, then highest score. A two-day match can give a player two innings, and each score in range is listed. Centuries have their own tile below.</p>
       <div class="summary" id="h-summary">Loading the most recently played round…</div>
       <div class="grid xii-grid" id="h-grid"></div>
     </section>
+    <section class="block" aria-labelledby="h-hl100">
+      <h2 id="h-hl100">Senior centuries of the round</h2>
+      <p class="blurb">Every senior player who scored 100 or more in a single innings in the same round, highest grade first, then highest score.</p>
+      <div class="summary" id="h100-summary">Loading the most recently played round…</div>
+      <div class="grid xii-grid" id="h100-grid"></div>
+    </section>
+    <section class="block" aria-labelledby="h-hlw">
+      <h2 id="h-hlw">Senior 4+ wickets of the round</h2>
+      <p class="blurb">Every senior bowler who took 4 or more wickets in a single innings in the same round as the senior scores above, best bowling figures first (most wickets, then fewest runs conceded).</p>
+      <div class="summary" id="hw-summary">Loading the most recently played round…</div>
+      <div class="grid xii-grid" id="hw-grid"></div>
+    </section>
+    </div>
+    <div data-hl-view="junior" hidden>
     <section class="block" aria-labelledby="h-hlj">
       <h2 id="h-hlj">Junior 25+ scores of the round</h2>
       <p class="blurb">Every junior player who scored 25 or more in a single innings in their team's latest match. Junior grades number their rounds separately, so each team's own last match is used, from the most recent week of junior cricket. Oldest age group first, then highest score.</p>
       <div class="summary" id="hj-summary">Loading each junior team's latest match…</div>
       <div class="grid xii-grid" id="hj-grid"></div>
     </section>
-    <section class="block" aria-labelledby="h-hlw">
-      <h2 id="h-hlw">Senior 4+ wickets of the round</h2>
-      <p class="blurb">Every senior bowler who took 4 or more wickets in a single innings in the same round as the senior 50+ list. Highest grade first, then most wickets, then fewest runs conceded.</p>
-      <div class="summary" id="hw-summary">Loading the most recently played round…</div>
-      <div class="grid xii-grid" id="hw-grid"></div>
-    </section>
     <section class="block" aria-labelledby="h-hlwj">
-      <h2 id="h-hlwj">Junior 4+ wickets of the round</h2>
-      <p class="blurb">Every junior bowler who took 4 or more wickets in a single innings in their team's latest match, the same matches as the junior 25+ list. Oldest age group first, then most wickets, then fewest runs conceded.</p>
+      <h2 id="h-hlwj">Junior 3+ wickets of the round</h2>
+      <p class="blurb">Every junior bowler who took 3 or more wickets in a single innings in their team's latest match, the same matches as the junior scores above. Best bowling figures first (most wickets, then fewest runs conceded).</p>
       <div class="summary" id="hwj-summary">Loading each junior team's latest match…</div>
       <div class="grid xii-grid" id="hwj-grid"></div>
     </section>
+    </div>
   </div>
   <div class="panel scores-panel" id="panel-scores" role="tabpanel" aria-labelledby="tab-scores">
     <div class="scores-head">
@@ -685,12 +699,15 @@ async function findLastRound(api, now, seasonCount) {
   const teamIds = await teamIdsFor(api, seasons);
   const today = ymdSydney(now);
   const rounds = new Map();
-  let failedTeams = 0;
+  /* A team can appear under more than one of the newest season records (see above), so failures are counted
+     per distinct team, not per attempt - otherwise one flaky team can be counted twice and the "could not read
+     N teams" note can claim more teams failed than the club actually has. */
+  const failedIds = new Set();
   for (const s of seasons) {
     const teams = (await api.getTeams(s.id)).filter(isSeniorTeam);
     await mapLimit(teams, 6, async t => {
       let list;
-      try { list = await api.getTeamMatches(t.id); } catch (e) { failedTeams++; return; }
+      try { list = await api.getTeamMatches(t.id); } catch (e) { failedIds.add(t.id); return; }
       for (const m of list) {
         if (m.matchType === "BYE" || !m.round) continue;
         const key = s.id + "|" + m.round.name;
@@ -706,6 +723,7 @@ async function findLastRound(api, now, seasonCount) {
     .map(r => ({ ...r, first: [...r.matches.values()].map(m => m.first).filter(Boolean).sort()[0] || "", last: [...r.matches.values()].map(m => m.last).filter(Boolean).sort().pop() || "" }))
     .filter(r => r.last && r.last <= today)
     .sort((a, b) => b.last.localeCompare(a.last));
+  const failedTeams = failedIds.size;
   if (failedTeams || !played.length) return { round: null, failedTeams, teamIds };
   return { round: played[0], failedTeams, teamIds };
 }
@@ -793,7 +811,7 @@ async function buildFifties(api, now) {
           innings: bats.length > 1 ? i + 1 : 0, grade, rank: gradeRank(grade), live: NOT_FINISHED.has(String(status || "").toUpperCase()) });
       });
       const grade = e.grades.get(m.id), status = (round.matches.get(m.id) || {}).status;
-      wkts.push(...hlHauls(m, { id: e.id, name: e.name, grade, rank: gradeRank(grade), live: NOT_FINISHED.has(String(status || "").toUpperCase()) }));
+      wkts.push(...hlHauls(m, { id: e.id, name: e.name, grade, rank: gradeRank(grade), live: NOT_FINISHED.has(String(status || "").toUpperCase()) }, HL_MIN_WKTS));
     }
   });
   list.sort(hlOrder);
@@ -805,17 +823,18 @@ function hlOrder(a, b) {
   return a.rank - b.rank || String(a.grade).localeCompare(String(b.grade)) || b.runs - a.runs || (b.notOut - a.notOut) || a.name.localeCompare(b.name);
 }
 const HL_MIN_WKTS = 4;
-/* Bowling innings with HL_MIN_WKTS or more wickets in one match performance; base carries the player and grade. */
-function hlHauls(m, base) {
+/* Bowling innings with at least minWkts wickets in one match performance; base carries the player and grade. */
+function hlHauls(m, base, minWkts) {
   const bowls = m.bowlingStatistics || [];
   return bowls.map((b, i) => ({ ...base, wkts: Number(b.wicketsTaken) || 0, conc: Number(b.runsConceded) || 0, overs: b.oversBowled,
-    innings: bowls.length > 1 ? i + 1 : 0 })).filter(x => x.wkts >= HL_MIN_WKTS);
+    innings: bowls.length > 1 ? i + 1 : 0 })).filter(x => x.wkts >= minWkts);
 }
-/* Highest grade first, then most wickets, then fewest runs conceded. */
+/* Best bowling figures first (most wickets, then fewest runs conceded), then highest grade, then name. */
 function hlBowlOrder(a, b) {
-  return a.rank - b.rank || String(a.grade).localeCompare(String(b.grade)) || b.wkts - a.wkts || a.conc - b.conc || a.name.localeCompare(b.name);
+  return b.wkts - a.wkts || a.conc - b.conc || a.rank - b.rank || String(a.grade).localeCompare(String(b.grade)) || a.name.localeCompare(b.name);
 }
 const HL_JUNIOR_MIN_RUNS = 25;
+const HL_JUNIOR_MIN_WKTS = 3;
 /* Juniors: oldest age group first; teams without an age (rare) go last. */
 function juniorHighRank(label) {
   const m = String(label).match(/\bU\s?(\d{1,2})\b/i);
@@ -829,12 +848,15 @@ async function buildJuniorHighlights(api, now) {
   const seasons = newestSeasons(await api.getSeasons(), now, 8);
   const today = ymdSydney(now);
   const started = [];
-  let failedTeams = 0;
+  /* Counted per distinct team, not per attempt - a team can appear under more than one of the
+     newest season records, so counting every failed attempt could report more teams failed than
+     the club actually has. */
+  const failedIds = new Set();
   for (const s of seasons) {
     const teams = (await api.getTeams(s.id)).filter(isJuniorTeam);
     await mapLimit(teams, 6, async t => {
       let list;
-      try { list = await api.getTeamMatches(t.id); } catch (e) { failedTeams++; return; }
+      try { list = await api.getTeamMatches(t.id); } catch (e) { failedIds.add(t.id); return; }
       for (const m of list) {
         if (m.matchType === "BYE" || !m.round) continue;
         const days = (m.matchSchedule || []).map(x => parseDate(x.startDateTime)).filter(d => !isNaN(d)).map(ymdSydney).sort();
@@ -844,6 +866,7 @@ async function buildJuniorHighlights(api, now) {
       }
     });
   }
+  const failedTeams = failedIds.size;
   if (!started.length) return { round: null, failedTeams };
   const week = mondayOf(started.map(e => e.first).sort().pop());
   const perTeam = new Map();
@@ -875,7 +898,7 @@ async function buildJuniorHighlights(api, now) {
         innings: bats.length > 1 ? i + 1 : 0, grade: x.e.label, rank: juniorHighRank(x.e.label),
         live: NOT_FINISHED.has(String(x.e.status || "").toUpperCase()) });
     });
-    wkts.push(...hlHauls(m, { id: x.id, name: x.name, grade: x.e.label, rank: juniorHighRank(x.e.label), live: NOT_FINISHED.has(String(x.e.status || "").toUpperCase()) }));
+    wkts.push(...hlHauls(m, { id: x.id, name: x.name, grade: x.e.label, rank: juniorHighRank(x.e.label), live: NOT_FINISHED.has(String(x.e.status || "").toUpperCase()) }, HL_JUNIOR_MIN_WKTS));
   });
   list.sort(hlOrder);
   wkts.sort(hlBowlOrder);
@@ -1127,22 +1150,30 @@ async function buildScores(api, now, kind) {
   const isFriday = new Date(today + "T12:00:00Z").getUTCDay() === 5;
   const all = [], byes = [];
   const ourTeams = new Set();
-  let failedTeams = 0;
+  /* Counted per distinct team, not per attempt - a team can appear under more than one of the
+     newest season records, so counting every failed attempt could report more teams failed than
+     the club actually has. */
+  const failedIds = new Set();
   for (const s of seasons) {
     const teams = (await api.getTeams(s.id)).filter(K.filter);
     teams.forEach(t => ourTeams.add(t.id));
     await mapLimit(teams, 6, async t => {
       let list;
-      try { list = await api.getTeamMatchesFresh(t.id); } catch (e) { failedTeams++; return; }
+      try { list = await api.getTeamMatchesFresh(t.id); } catch (e) { failedIds.add(t.id); return; }
       const grade = K.label(t), rank = K.rank(grade);
       for (const m of list) {
         if (!m.round) continue;
         const base = { teamId: t.id, key: s.id + "|" + m.round.name, roundName: m.round.name, season: s.name };
+        /* A bye's own date, when PlayHQ gives one - used as a fallback below when the bye's round
+           name doesn't line up with the rest of its round (its name can come through blank or
+           differently-formed than a real fixture's, since it has no opponent to carry it). */
+        const byeDays = (m.matchSchedule || []).map(x => parseDate(x.startDateTime)).filter(d => !isNaN(d)).map(ymdSydney).sort();
         if (m.matchType === "BYE") {
-          byes.push({ ...base, row: { id: "bye" + t.id, grade, rank, outcome: "bye", us: [], them: { name: "", innings: [] } } });
+          byes.push({ ...base, first: byeDays[0] || "", last: byeDays[byeDays.length - 1] || "",
+            row: { id: "bye" + t.id, grade, rank, outcome: "bye", us: [], them: { name: "", innings: [] } } });
           continue;
         }
-        const days = (m.matchSchedule || []).map(x => parseDate(x.startDateTime)).filter(d => !isNaN(d)).map(ymdSydney).sort();
+        const days = byeDays;
         if (!days.length) continue;
         const us = (m.teams || []).find(x => x.id === t.id) || null;
         const them = (m.teams || []).find(x => x.id !== t.id) || null;
@@ -1162,6 +1193,7 @@ async function buildScores(api, now, kind) {
     t.name = (e.row.themId && ourTeams.has(e.row.themId) ? "" : shortClub(t.club)) || t.display || "Opponent";
     delete t.club; delete t.display;
   }
+  const failedTeams = failedIds.size;
   const started = all.filter(e => e.first <= today);
   const future = all.filter(e => e.first > today);
   /* A two-day (or longer) game can still be running on a day its start date doesn't cover today's date range,
@@ -1169,11 +1201,25 @@ async function buildScores(api, now, kind) {
   const inProgressNow = all.some(e => e.first <= today && e.last >= today && (e.row.outcome === "progress" || e.row.outcome === "pending"));
   const wantUpcoming = isFriday && !inProgressNow;
 
+  /* A bye row is normally matched to a round by its key (season + round name) - exact and precise.
+     But PlayHQ builds a bye's fixture entry with no opponent to carry the round's own name, so it
+     can come through blank or worded slightly differently from a real fixture's; a bye that misses
+     on the key is still matched here if it falls within the same calendar week and nothing else
+     already accounts for that team, so a team's bye still shows instead of silently disappearing. */
+  function matchingByes(keys, windowFirst, windowLast, excludeTeamIds) {
+    const keySet = new Set(keys);
+    const exact = byes.filter(x => keySet.has(x.key));
+    const covered = new Set([...excludeTeamIds, ...exact.map(x => x.teamId)]);
+    const seasonIds = new Set(keys.map(k => k.split("|")[0]));
+    const fallback = byes.filter(x => seasonIds.has(x.key.split("|")[0]) && !covered.has(x.teamId)
+      && x.first && x.first >= windowFirst && x.first <= windowLast);
+    return exact.concat(fallback);
+  }
   function juniorRound(pool, forward) {
     if (!pool.length) return null;
     const anchor = forward ? pool.map(e => e.first).sort()[0] : pool.map(e => e.first).sort().pop();
-    const week = mondayOf(anchor);
-    const inWeek = forward ? pool.filter(e => e.first <= addDays(week, 6)) : pool.filter(e => e.last >= week);
+    const week = mondayOf(anchor), weekEnd = addDays(week, 6);
+    const inWeek = forward ? pool.filter(e => e.first <= weekEnd) : pool.filter(e => e.last >= week);
     const perTeam = new Map();
     for (const e of inWeek) {
       const cur = perTeam.get(e.teamId);
@@ -1185,7 +1231,7 @@ async function buildScores(api, now, kind) {
     chosen.forEach(e => count.set(e.key, (count.get(e.key) || 0) + 1));
     const topKey = [...count].sort((a, b) => b[1] - a[1])[0][0];
     const top = chosen.find(e => e.key === topKey);
-    return { picked: chosen.concat(byes.filter(x => count.has(x.key) && !perTeam.has(x.teamId))),
+    return { picked: chosen.concat(matchingByes([...count.keys()], week, weekEnd, new Set(perTeam.keys()))),
              name: count.size > 1 ? "This week" : top.roundName, season: top.season };
   }
   function seniorRound(pool, forward) {
@@ -1193,7 +1239,10 @@ async function buildScores(api, now, kind) {
     const chosen = pool.slice().sort((a, b) => forward
       ? (a.first.localeCompare(b.first) || a.last.localeCompare(b.last))
       : (b.first.localeCompare(a.first) || b.last.localeCompare(a.last)))[0];
-    return { picked: all.filter(e => e.key === chosen.key).concat(byes.filter(x => x.key === chosen.key)),
+    const roundMatches = all.filter(e => e.key === chosen.key);
+    const roundTeamIds = new Set(roundMatches.map(e => e.teamId));
+    const week = mondayOf(chosen.first), weekEnd = addDays(week, 6);
+    return { picked: roundMatches.concat(matchingByes([chosen.key], week, weekEnd, roundTeamIds)),
              name: chosen.roundName, season: chosen.season };
   }
   const pickRound = kind === "junior" ? juniorRound : seniorRound;
@@ -2235,12 +2284,18 @@ $("x-copy").addEventListener("click", async e => {
 
 /* ---- Highlights tab ---- */
 let hl = { state: "idle", data: null, at: null };
+let hlView = "senior";
 function hlScore(p) { return p.runs + (p.notOut ? "*" : "") + (p.balls ? " (" + p.balls + " balls)" : ""); }
 function hlFigures(p) { return p.wkts + " for " + p.conc + (p.overs != null && p.overs !== "" ? " (" + p.overs + " overs)" : ""); }
-const HL_BAT = { key: "list", fig: hlScore, what: n => plural(n, "score", "scores"), label: min => min + "+ scores", none: min => "Nobody scored " + min + " or more." };
-const HL_BOWL = { key: "wkts", fig: hlFigures, what: n => plural(n, "haul", "hauls"), label: min => min + "+ wickets", none: min => "Nobody took " + min + " or more wickets." };
+/* A tile covers a range [min, max] (max omitted means "min or more") read off `value` on each item. */
+const HL_BAT = { key: "list", value: "runs", fig: hlScore, what: n => plural(n, "score", "scores"), unit: "scores",
+  none: (min, max) => "Nobody scored " + hlRangeLong(min, max) + "." };
+const HL_BOWL = { key: "wkts", value: "wkts", fig: hlFigures, what: n => plural(n, "haul", "hauls"), unit: "wickets",
+  none: (min, max) => "Nobody took " + hlRangeLong(min, max) + " wickets." };
 function hlWhere(p) { return shortGrade(p.grade) + (p.innings ? ", innings " + p.innings : ""); }
-/* One section: s = { sum, grid, min, data, where, loading, kind (HL_BAT or HL_BOWL) } */
+function hlRangeShort(min, max) { return max != null ? min + " to " + max : min + "+"; }
+function hlRangeLong(min, max) { return max != null ? min + " to " + max : min + " or more"; }
+/* One section: s = { sum, grid, min, max, data, where, loading, kind (HL_BAT or HL_BOWL) } */
 function renderHLSection(s) {
   const sum = $(s.sum), grid = $(s.grid);
   grid.innerHTML = "";
@@ -2256,21 +2311,24 @@ function renderHLSection(s) {
       : "<strong>No matches have been played yet.</strong>";
     return;
   }
-  const K = s.kind, items = d[K.key] || [];
-  sum.innerHTML = s.where(d) + K.what(items.length) + " of " + s.min + " or more.";
+  const K = s.kind;
+  const items = (d[K.key] || []).filter(p => p[K.value] >= s.min && (s.max == null || p[K.value] <= s.max));
+  const short = hlRangeShort(s.min, s.max), long = hlRangeLong(s.min, s.max);
+  sum.innerHTML = s.where(d) + K.what(items.length) + " of " + long + ".";
   if (items.some(p => p.live)) sum.innerHTML += '<span class="bad">Figures marked "Not finished" are from matches still in progress and may change.</span>';
   if (hl.state === "error") sum.innerHTML += '<span class="bad">Could not refresh, so this is from ' + fmtDate(hl.at) + ". Press Refresh to try again.</span>";
   if (d.failedTeams > 0) sum.innerHTML += '<span class="bad">Could not read the fixtures for ' + plural(d.failedTeams, "team", "teams") + ", so some may be missing. Press Refresh to try again.</span>";
   if (d.failed > 0) sum.innerHTML += '<span class="bad">Could not check ' + plural(d.failed, "player", "players") + ", so they may be missing. Press Refresh to try again.</span>";
   const card = document.createElement("section");
   card.className = "card";
-  card.setAttribute("aria-label", K.label(s.min));
+  const label = short + " " + K.unit;
+  card.setAttribute("aria-label", label);
   const head = document.createElement("div");
   head.className = "card-head";
-  head.innerHTML = '<span class="big">' + items.length + '</span><span class="label">' + K.label(s.min) + "</span>";
+  head.innerHTML = '<span class="big">' + items.length + '</span><span class="label">' + label + "</span>";
   card.appendChild(head);
   if (!items.length) {
-    const p = document.createElement("p"); p.className = "empty"; p.textContent = K.none(s.min); card.appendChild(p);
+    const p = document.createElement("p"); p.className = "empty"; p.textContent = K.none(s.min, s.max); card.appendChild(p);
   } else {
     const ul = document.createElement("ul");
     items.forEach((p, i) => {
@@ -2296,29 +2354,34 @@ function renderHL() {
   const sw = x => "<strong>" + x.round.name + "</strong> (" + xiiRounds(x.round) + ", " + x.round.season + "), " + plural(x.round.matches, "senior match", "senior matches") + ": ";
   const jw = x => "<strong>Latest junior matches</strong> (" + hlJuniorDates(x.round) + ", " + x.round.season + "), " + plural(x.round.teams, "team", "teams") + ": ";
   const sl = "Loading the most recently played round…", jl = "Loading each junior team's latest match…";
-  renderHLSection({ sum: "h-summary", grid: "h-grid", min: HL_MIN_RUNS, data: d.senior, loading: sl, where: sw, kind: HL_BAT });
-  renderHLSection({ sum: "hj-summary", grid: "hj-grid", min: HL_JUNIOR_MIN_RUNS, data: d.junior, loading: jl, where: jw, kind: HL_BAT });
+  renderHLSection({ sum: "h-summary", grid: "h-grid", min: HL_MIN_RUNS, max: 99, data: d.senior, loading: sl, where: sw, kind: HL_BAT });
+  renderHLSection({ sum: "h100-summary", grid: "h100-grid", min: 100, data: d.senior, loading: sl, where: sw, kind: HL_BAT });
   renderHLSection({ sum: "hw-summary", grid: "hw-grid", min: HL_MIN_WKTS, data: d.senior, loading: sl, where: sw, kind: HL_BOWL });
-  renderHLSection({ sum: "hwj-summary", grid: "hwj-grid", min: HL_MIN_WKTS, data: d.junior, loading: jl, where: jw, kind: HL_BOWL });
+  renderHLSection({ sum: "hj-summary", grid: "hj-grid", min: HL_JUNIOR_MIN_RUNS, data: d.junior, loading: jl, where: jw, kind: HL_BAT });
+  renderHLSection({ sum: "hwj-summary", grid: "hwj-grid", min: HL_JUNIOR_MIN_WKTS, data: d.junior, loading: jl, where: jw, kind: HL_BOWL });
 }
-function hlText() {
+function hlText(view) {
   const d = hl.data;
   if (!d) return "Parramatta Cheetahs highlights: not loaded yet.";
   const out = [];
-  const add = (title, x, min, K) => {
+  const add = (title, x, min, max, K) => {
     if (!x || !x.round) { out.push(title + ": no matches played yet.", ""); return; }
     out.push(title, "");
-    const items = x[K.key] || [];
-    if (!items.length) out.push(K.none(min));
+    const items = (x[K.key] || []).filter(p => p[K.value] >= min && (max == null || p[K.value] <= max));
+    if (!items.length) out.push(K.none(min, max));
     items.forEach((p, i) => out.push((i + 1) + ". " + p.name + " (" + hlWhere(p) + ") - " + K.fig(p) + (p.live ? " (not finished)" : "")));
     out.push("");
   };
   const st = d.senior.round ? " - " + d.senior.round.name + " (" + xiiRounds(d.senior.round) + ")" : "";
   const jt = " - latest matches" + (d.junior.round ? " (" + hlJuniorDates(d.junior.round) + ")" : "");
-  add("Parramatta Cheetahs senior " + HL_MIN_RUNS + "+ scores" + st, d.senior, HL_MIN_RUNS, HL_BAT);
-  add("Parramatta Cheetahs junior " + HL_JUNIOR_MIN_RUNS + "+ scores" + jt, d.junior, HL_JUNIOR_MIN_RUNS, HL_BAT);
-  add("Parramatta Cheetahs senior " + HL_MIN_WKTS + "+ wickets" + st, d.senior, HL_MIN_WKTS, HL_BOWL);
-  add("Parramatta Cheetahs junior " + HL_MIN_WKTS + "+ wickets" + jt, d.junior, HL_MIN_WKTS, HL_BOWL);
+  if (view === "junior") {
+    add("Parramatta Cheetahs junior " + HL_JUNIOR_MIN_RUNS + "+ scores" + jt, d.junior, HL_JUNIOR_MIN_RUNS, null, HL_BAT);
+    add("Parramatta Cheetahs junior " + HL_JUNIOR_MIN_WKTS + "+ wickets" + jt, d.junior, HL_JUNIOR_MIN_WKTS, null, HL_BOWL);
+  } else {
+    add("Parramatta Cheetahs senior 50 to 99 scores" + st, d.senior, HL_MIN_RUNS, 99, HL_BAT);
+    add("Parramatta Cheetahs senior centuries" + st, d.senior, 100, null, HL_BAT);
+    add("Parramatta Cheetahs senior " + HL_MIN_WKTS + "+ wickets" + st, d.senior, HL_MIN_WKTS, null, HL_BOWL);
+  }
   return out.join("\n").trim();
 }
 let hlRun = 0;
@@ -2342,10 +2405,15 @@ async function loadHL() {
 $("h-refresh").addEventListener("click", loadHL);
 $("h-copy").addEventListener("click", async e => {
   const btn = e.currentTarget;
-  try { await navigator.clipboard.writeText(hlText()); btn.textContent = "Copied"; }
+  try { await navigator.clipboard.writeText(hlText(hlView)); btn.textContent = "Copied"; }
   catch (err) { btn.textContent = "Copy not available"; }
   setTimeout(() => { btn.textContent = "Copy list"; }, 2000);
 });
+document.querySelectorAll("#seg-hl button").forEach(b => b.addEventListener("click", () => {
+  hlView = b.dataset.view;
+  document.querySelectorAll("#seg-hl button").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+  document.querySelectorAll("[data-hl-view]").forEach(el => { el.hidden = el.dataset.hlView !== hlView; });
+}));
 
 /* ---- Scorecard audit tab ---- */
 let audit = { state: "idle", data: null, at: null };
