@@ -727,7 +727,9 @@ async function roundRoster(api, round, teamIds) {
   return roster;
 }
 async function buildClubXII(api, now) {
-  const { round, failedTeams, teamIds } = await findLastRound(api, now);
+  /* PlayHQ-backed (see findLastRound): several concurrent season records per half-year, so more of
+     the newest seasons need checking than a single-season-per-half-year source would need. */
+  const { round, failedTeams, teamIds } = await findLastRound(api, now, 8);
   if (!round) return { round: null, failedTeams };
   const roster = await roundRoster(api, round, teamIds);
   let failed = 0;
@@ -769,7 +771,9 @@ async function buildClubXII(api, now) {
 const HL_MIN_RUNS = 50;
 /* Every club innings of HL_MIN_RUNS or more in the most recently played senior round (the same round as the Club XII). */
 async function buildFifties(api, now) {
-  const { round, failedTeams, teamIds } = await findLastRound(api, now);
+  /* PlayHQ-backed (see findLastRound): several concurrent season records per half-year, so more of
+     the newest seasons need checking than a single-season-per-half-year source would need. */
+  const { round, failedTeams, teamIds } = await findLastRound(api, now, 8);
   if (!round) return { round: null, failedTeams };
   const roster = await roundRoster(api, round, teamIds);
   let failed = 0;
@@ -820,7 +824,9 @@ function juniorHighRank(label) {
 /* Junior innings of HL_JUNIOR_MIN_RUNS or more. Junior grades number rounds separately, so for each junior team this
    takes its latest match from the most recent week of junior cricket (the same matches as the Junior Scores tab). */
 async function buildJuniorHighlights(api, now) {
-  const seasons = newestSeasons(await api.getSeasons(), now, 2);
+  /* PlayHQ-backed: several concurrent season records per half-year, so more of the newest seasons
+     need checking than a single-season-per-half-year source would need. */
+  const seasons = newestSeasons(await api.getSeasons(), now, 8);
   const today = ymdSydney(now);
   const started = [];
   let failedTeams = 0;
@@ -1103,10 +1109,11 @@ function mondayOf(ymd) {
    api adds getTeamMatchesFresh(teamId) and getScorecardFresh(matchId), which are not remembered between refreshes. */
 async function buildScores(api, now, kind) {
   const K = SCORE_KINDS[kind || "senior"];
-  /* PlayHQ gives several concurrent season records per half-year, one per competition (see
-     findLastRound) - Senior Scores (PlayHQ-backed) needs more of them than Junior (still Play
-     Cricket, one season per half-year) to be sure of including the right one. */
-  const seasons = newestSeasons(await api.getSeasons(), now, kind === "senior" ? 8 : 2);
+  /* PlayHQ (both Senior and Junior Scores are PlayHQ-backed) gives several concurrent season
+     records per half-year, one per competition (see findLastRound), so more of the newest seasons
+     need checking than a single-season-per-half-year source would need, to be sure of including
+     the right one. */
+  const seasons = newestSeasons(await api.getSeasons(), now, 8);
   const today = ymdSydney(now);
   const all = [], byes = [];
   const ourTeams = new Set();
@@ -1614,32 +1621,54 @@ function makeApi() {
   };
 }
 
-/* ---- PlayHQ adapter (Audit and senior Scores only) ----
+/* ---- PlayHQ adapter (Audit, Scores, Club XII, Highlights) ----
    Everything above still talks to Play Cricket via makeApi(); this talks to our own Cloudflare
    Worker (see worker/README.md), which holds the PlayHQ key. It reshapes PlayHQ's responses into
-   the same shapes buildAudit/buildScores already expect from a Play Cricket scorecard and fixture
-   list, so neither of those functions needed to change.
+   the same shapes buildAudit/buildScores/buildClubXII/buildFifties/buildJuniorHighlights already
+   expect from Play Cricket, so none of those functions needed to change.
    Known gaps, both inherent to PlayHQ's public API rather than fixable here:
-   - No per-player match-history or season-leaderboard endpoint for cricket, so this adapter can't
-     support Club XII, Highlights, Milestones or the individual/career parts of Records - those
-     stay on makeApi().
+   - No per-player season/career leaderboard endpoint for cricket, so this adapter can't support
+     Milestones or the individual/career parts of Records - those stay on makeApi(). Club XII and
+     Highlights only ever need ONE round's figures though, which IS available (getMatch/getPerf
+     below build it from the same per-match scorecards Audit/Scores already fetch).
    - No wicketkeeper-role field anywhere, so the "no keeper marked" audit check is always skipped
-     for PlayHQ-backed audits (see auditTeam's checkKeeper option) rather than firing on every team. */
+     for PlayHQ-backed audits (see auditTeam's checkKeeper option) rather than firing on every team,
+     and Club XII's keeper pick falls back to stumpings alone (see indexPerf below) rather than
+     catches, which can't be attributed to the keeper specifically on PlayHQ. */
 const PHQ_ORG = "b0196c19-88f5-487a-9f5e-c7aa1115584d";
 const PHQ_PROXY_BASE = "https://cheetahs-playhq-proxy.sathish-kswami.workers.dev";
 
-async function phqJSON(path) {
-  const r = await fetch(PHQ_PROXY_BASE + path);
-  if (!r.ok) throw new Error("HTTP " + r.status);
-  const t = await r.text();
-  return t ? JSON.parse(t) : {};
+/* Every PlayHQ-backed tab (Audit, Senior/Junior Scores, Club XII, Highlights) reads largely the
+   same underlying seasons/teams/round-match data, and Club XII and Highlights additionally need
+   every round match's full scorecard. Without sharing, switching between tabs re-fetches all of
+   it from scratch through the Cloudflare Worker every time. This cache is keyed by request path
+   and lives for the page's lifetime (cleared only by a real page reload, or by phqClearCache()),
+   so a path fetched once by any tab is free for every other tab after it. "fresh" requests (the
+   ones Scores uses for a live/in-progress match) bypass it entirely, same as before - they're
+   never cached and never read from the cache, so nothing changes for them. */
+const PHQ_HTTP_CACHE = new Map();
+function phqClearCache() { PHQ_HTTP_CACHE.clear(); }
+async function phqJSON(path, opts) {
+  const fresh = opts && opts.fresh;
+  if (!fresh && PHQ_HTTP_CACHE.has(path)) return PHQ_HTTP_CACHE.get(path);
+  const p = (async () => {
+    const r = await fetch(PHQ_PROXY_BASE + path);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const t = await r.text();
+    return t ? JSON.parse(t) : {};
+  })();
+  if (!fresh) {
+    PHQ_HTTP_CACHE.set(path, p);
+    p.catch(() => { if (PHQ_HTTP_CACHE.get(path) === p) PHQ_HTTP_CACHE.delete(path); });
+  }
+  return p;
 }
 /* Follows PlayHQ's cursor pagination (metadata.hasMore / metadata.nextCursor) until it stops. */
-async function phqPaged(path) {
+async function phqPaged(path, opts) {
   let cursor = null, all = [];
   for (let i = 0; i < 20; i++) {
     const url = path + (cursor ? (path.includes("?") ? "&" : "?") + "cursor=" + encodeURIComponent(cursor) : "");
-    const j = await phqJSON(url);
+    const j = await phqJSON(url, opts);
     all = all.concat(j.data || []);
     if (!j.metadata || !j.metadata.hasMore) break;
     cursor = j.metadata.nextCursor;
@@ -1744,11 +1773,11 @@ function phqAdaptScorecard(d) {
         else if (dismissedBy(shared, a.id, "LEG_BEFORE_WICKET")) dismissalType = "lbw";
         else dismissalType = "out";
       }
-      return { playerShortName: fullName(a.id), runsScored: stat(a.statistics, "TOTAL_RUNS"), ballsFaced: stat(a.statistics, "BALLS_FACED"), dismissalType };
+      return { playerShortName: fullName(a.id), participantId: a.id, runsScored: stat(a.statistics, "TOTAL_RUNS"), ballsFaced: stat(a.statistics, "BALLS_FACED"), dismissalType };
     });
     const bowling = (bowlingTeam ? bowlingTeam.appearances || [] : [])
       .filter(a => stat(a.statistics, "OVERS") > 0 || stat(a.statistics, "WICKETS") > 0 || stat(a.statistics, "RUNS") > 0)
-      .map(a => ({ playerShortName: fullName(a.id), runsConceded: stat(a.statistics, "RUNS"), oversBowled: stat(a.statistics, "OVERS") }));
+      .map(a => ({ playerShortName: fullName(a.id), participantId: a.id, wicketsTaken: stat(a.statistics, "WICKETS"), runsConceded: stat(a.statistics, "RUNS"), oversBowled: stat(a.statistics, "OVERS") }));
     const fielding = (bowlingTeam ? bowlingTeam.appearances || [] : []).map(a => ({
       playerShortName: fullName(a.id), participantId: a.id,
       totalCatches: stat(a.statistics, "TOTAL_CATCHES"),
@@ -1781,21 +1810,57 @@ function makePhqApi() {
       return { id: t.id, name: suffix ? "Parramatta CCC (" + suffix + ")" : "Parramatta CCC", grade: { name: t.grade && t.grade.name } };
     });
   };
-  const scorecard = async id => {
-    const j = await phqJSON("/v2/games/" + id + "/summary");
+  const scorecard = async (id, fresh) => {
+    const j = await phqJSON("/v2/games/" + id + "/summary", fresh ? { fresh: true } : undefined);
     return j.data ? phqAdaptScorecard(j.data) : null;
+  };
+  /* Per-participant match-performance records, in the same shape Play Cricket's match-performances
+     endpoint returns (one entry per match, each holding that player's batting/bowling/fielding
+     stats for every innings of that match) - built as a side effect of getMatch rather than its
+     own API call, from data getMatch already has to fetch for the roster. getPerf below just reads
+     this index, so looking up a round's rosters (via getMatch, once per match) and then every
+     player's figures for that round (via getPerf) costs exactly one PlayHQ call per match, however
+     many players are involved - the same one call Club XII/Highlights already needed anyway. */
+  const perfIndex = new Map(); // participantId -> Map<matchId, {id, battingStatistics, bowlingStatistics, fieldingStatistics}>
+  const indexPerf = (matchId, sc) => {
+    const recFor = pid => {
+      if (!perfIndex.has(pid)) perfIndex.set(pid, new Map());
+      const byMatch = perfIndex.get(pid);
+      if (!byMatch.has(matchId)) byMatch.set(matchId, { id: matchId, battingStatistics: [], bowlingStatistics: [], fieldingStatistics: [] });
+      return byMatch.get(matchId);
+    };
+    for (const inn of (sc ? sc.innings : [])) {
+      for (const b of (inn.batting || [])) recFor(b.participantId).battingStatistics.push({ runsScored: b.runsScored, ballsFaced: b.ballsFaced, dismissalTypeId: b.dismissalType === "" ? 1 : 2 });
+      for (const bw of (inn.bowling || [])) recFor(bw.participantId).bowlingStatistics.push({ wicketsTaken: bw.wicketsTaken, runsConceded: bw.runsConceded, oversBowled: bw.oversBowled });
+      /* No wicketkeeper-role field exists on PlayHQ at all, so a generic fielder's catch can't be
+         told apart from the keeper's - wicketKeeperCatches is always reported as 0 here, same
+         "degrade to unknown rather than guess wrong" choice already made for the Audit keeper
+         check. A stumping can only be the keeper's, so that figure alone stays reliable. */
+      for (const f of (inn.fielding || [])) recFor(f.participantId).fieldingStatistics.push({ wicketKeeperCatches: 0, stumpings: f.stumpings });
+    }
   };
   return {
     getSeasons: () => once("seasons", () => phqPaged("/v1/organisations/" + PHQ_ORG + "/seasons")),
     getTeams: id => once("teams" + id, () => teamsForSeason(id)),
     getTeamMatches: id => once("tm" + id, async () => (await phqPaged("/v1/teams/" + id + "/fixture")).map(phqFixtureToLegacy)),
-    getTeamMatchesFresh: async id => (await phqPaged("/v1/teams/" + id + "/fixture")).map(phqFixtureToLegacy),
+    getTeamMatchesFresh: async id => (await phqPaged("/v1/teams/" + id + "/fixture", { fresh: true })).map(phqFixtureToLegacy),
     getScorecard: id => once("sc" + id, () => scorecard(id)),
-    getScorecardFresh: id => scorecard(id),
+    getScorecardFresh: id => scorecard(id, true),
     getMatch: id => once("match" + id, async () => {
       const sc = await scorecard(id);
-      return { teams: (sc ? sc.teams : []).map(t => ({ id: t.id, name: t.name, displayName: t.displayName })) };
-    })
+      indexPerf(id, sc);
+      return {
+        teams: (sc ? sc.teams : []).map(t => ({ id: t.id, name: t.name, displayName: t.displayName })),
+        Teams: (sc ? sc.teams : []).map(t => ({
+          Id: t.id,
+          Players: (t.players || []).map(p => ({ ParticipantId: p.participantId, Name: p.name, Roles: p.roles || [] }))
+        }))
+      };
+    }),
+    /* The "seasonId" argument is accepted only for interface-compatibility with Play Cricket's
+       getPerf(playerId, seasonId) - PlayHQ's index is keyed purely by participant id, since every
+       performance it can ever hold already came from a getMatch call the caller made itself. */
+    getPerf: (pid, sid) => [...(perfIndex.get(pid) || new Map()).values()]
   };
 }
 
@@ -2124,7 +2189,7 @@ async function loadXII() {
   btn.disabled = true; btn.textContent = "Refreshing…";
   xii.state = "loading"; renderXII();
   try {
-    const data = await buildClubXII(makeApi(), new Date());
+    const data = await buildClubXII(makePhqApi(), new Date());
     if (run !== xiiRun) return;
     xii = { state: "ok", data, at: new Date().toISOString() };
   } catch (e) {
@@ -2238,7 +2303,7 @@ async function loadHL() {
   btn.disabled = true; btn.textContent = "Refreshing…";
   hl.state = "loading"; renderHL();
   try {
-    const api = makeApi();
+    const api = makePhqApi();
     const [senior, junior] = await Promise.all([buildFifties(api, new Date()), buildJuniorHighlights(api, new Date())]);
     if (run !== hlRun) return;
     hl = { state: "ok", data: { senior, junior }, at: new Date().toISOString() };
@@ -2442,7 +2507,7 @@ function scoresTab(prefix, kind, word) {
     btn.disabled = true; btn.textContent = "Refreshing…";
     state.state = "loading"; render();
     try {
-      const data = await buildScores(kind === "senior" ? makePhqApi() : makeApi(), new Date(), kind);
+      const data = await buildScores(makePhqApi(), new Date(), kind);
       if (run !== runNo) return;
       state = { state: "ok", data, at: new Date().toISOString() };
     } catch (e) {
