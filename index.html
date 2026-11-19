@@ -1110,7 +1110,8 @@ function isJuniorTeam(t) {
    coach at all. The coach shown in brackets is kept here by hand, keyed by the label without it. */
 const JUNIOR_COACHES = { "U10 White": "Murali", "U10 Blue": "Parveen", "Girls Stage 1 Brown": "Surendra" };
 function juniorLabel(t) {
-  const pq = String(t.name || "").match(/^parramatta ccc\s+(.+)$/i);
+  const pq = String(t.name || "").match(/^parramatta ccc\s*(?:\(\s*(.+?)\s*\)|\s(.+))$/i); /* makePhqApi gives "Parramatta CCC (White)" */
+  if (pq) pq[1] = pq[1] || pq[2];
   const gname = (t.grade && t.grade.name) || "";
   const age = gname.match(/^U\s?\d{1,2}/i);
   if (pq && age) {
