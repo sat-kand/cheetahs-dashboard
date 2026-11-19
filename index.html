@@ -1739,6 +1739,11 @@ async function careerLists(api) {
    season by season and added up. That also gives the candidates for the best individual innings. */
 /* Most matches as coach, assistant coach and manager, from each completed junior match's team sheet (Play Cricket's
    non-playing members and their roles). A person counts once per match per role, whichever of our teams it was. */
+/* The team sheets list every non-player as "Coach", so assistant coaches and managers are named here by hand, as the
+   club tells us. Someone listed here is counted in that role instead of as coach, in every junior team. */
+const JUNIOR_ROLE_OVERRIDES = {
+  "Krishna Mohan Didigam": "assistant"
+};
 async function juniorOfficials(api, rows) {
   const tally = { coach: new Map(), assistant: new Map(), manager: new Map() };
   const roleOf = r => /assist/i.test(r) ? "assistant" : /manag/i.test(r) ? "manager" : /coach/i.test(r) ? "coach" : "";
@@ -1750,6 +1755,8 @@ async function juniorOfficials(api, rows) {
       const name = displayName(tidyName(m.Name || m.name || ""));
       if (!name || isHiddenName(name)) continue;
       const roles = new Set((m.Roles || m.roles || []).map(roleOf).filter(Boolean));
+      const override = JUNIOR_ROLE_OVERRIDES[name];
+      if (override && roles.delete("coach")) roles.add(override);
       for (const role of roles) {
         const e = tally[role].get(name) || { who: name, matches: new Set(), teams: new Set() };
         e.matches.add(r.id);
