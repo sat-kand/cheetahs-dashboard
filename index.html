@@ -1943,8 +1943,15 @@ function phqClearCache() { PHQ_HTTP_CACHE.clear(); }
    A tab's Refresh button calls phqReset(), which drops both, so a corrected scorecard shows straight away. */
 const PHQ_STORE = "phq-v1";
 const PHQ_KEEP_MS = 12 * 3600 * 1000;
-const phqStorable = path => /\/(seasons|teams|grades)$/.test(path) || /\/games\/[^/]+\/summary$/.test(path);
-const phqFinished = (path, j) => !/\/summary$/.test(path) || String(((j && j.data) || j || {}).status || "").toUpperCase() === "FINAL";
+const phqStorable = path => /\/(seasons|teams|grades)$/.test(path) || /\/games\/[^/]+\/summary$/.test(path) || /^\/v1\/teams\/[^/?]+\/fixture/.test(path);
+/* A team's fixture list is kept only once every game in it is over (a past season's team); a current team's list
+   always has games still to come, so it is fetched each visit. */
+const PHQ_OVER = /^(FINAL|ABANDONED|CANCELLED|FORFEIT)/;
+const phqFinished = (path, j) => {
+  if (/\/summary$/.test(path)) return String(((j && j.data) || j || {}).status || "").toUpperCase() === "FINAL";
+  if (/\/fixture/.test(path)) { const g = (j && j.data) || []; return g.length > 0 && !(j.metadata && j.metadata.hasMore) && g.every(x => PHQ_OVER.test(String(x.status || "").toUpperCase())); }
+  return true;
+};
 async function phqStoreGet(path) {
   try {
     if (!phqStorable(path) || !window.caches) return null;
