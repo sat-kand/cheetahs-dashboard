@@ -1712,17 +1712,15 @@ function phqAdaptScorecard(d) {
     players: (d.appearances || []).filter(a => a.teamId === t.id).map(a => ({ participantId: a.id, name: fullName(a.id), roles: [] }))
   }));
   const stat = (arr, type) => { const e = (arr || []).find(x => x.type === type); return e ? e.value : 0; };
-  /* A CAUGHT/STUMPED/RUN_OUT entry with no one but the batter attached isn't a completed dismissal -
-     PlayHQ logs a dropped/missed chance under the same stat type, with no bowler or fielder credited
-     since nobody actually completed it. Confirmed empirically: a real match had a CAUGHT entry naming
-     only the batter, who was in fact not out. A caught-and-bowled dismissal has BATTING + BOWLING but
-     no separate FIELDING entry (the bowler is the catcher), so this checks for any second participant
-     rather than specifically a FIELDING role. BOWLED and LBW never involve a fielder, so they're
-     exempt from this check. */
-  const NEEDS_FIELDER = new Set(["CAUGHT", "STUMPED", "RUN_OUT"]);
+  /* sharedStatistics linkage (who bowled/fielded a dismissal) is inconsistently populated - some
+     matches have it fully linked, others leave CAUGHT entries naming only the batter even for a
+     genuine dismissal, so its presence or absence can't be used to tell a real dismissal from a
+     stray entry. Each batting appearance's own "status" field is the reliable signal instead
+     ("OUT" vs "NOT_OUT" - PlayHQ also uses NOT_OUT for a player who didn't get a batting chance at
+     all, e.g. the 12th man). Confirmed empirically: a real match had a CAUGHT entry naming a batter
+     whose own status was NOT_OUT (he never came out to bat). */
   const dismissedBy = (sharedStats, appearanceId, type) => (sharedStats || []).some(s => s.type === type &&
-    (s.appearances || []).some(x => x.role === "BATTING" && x.id === appearanceId) &&
-    (!NEEDS_FIELDER.has(type) || (s.appearances || []).some(x => x.role !== "BATTING")));
+    (s.appearances || []).some(x => x.role === "BATTING" && x.id === appearanceId));
   const battedBefore = new Map();
   const innings = [];
   for (const period of (d.periods || [])) {
@@ -1734,12 +1732,18 @@ function phqAdaptScorecard(d) {
     const closeStatus = String(battingTeam.status || "").toLowerCase().replace(/_/g, " ");
     const shared = period.sharedStatistics;
     const batting = (battingTeam.appearances || []).map(a => {
+      /* Only a batter PlayHQ itself marks "OUT" can have a real dismissal type - this excludes both
+         a not-out batter and one who never came out to bat (also status "NOT_OUT" in PlayHQ's data),
+         regardless of what sharedStatistics entries happen to name them. */
       let dismissalType = "";
-      if (dismissedBy(shared, a.id, "CAUGHT")) dismissalType = "caught";
-      else if (dismissedBy(shared, a.id, "RUN_OUT")) dismissalType = "run out";
-      else if (dismissedBy(shared, a.id, "STUMPED")) dismissalType = "stumped";
-      else if (dismissedBy(shared, a.id, "BOWLED")) dismissalType = "bowled";
-      else if (dismissedBy(shared, a.id, "LEG_BEFORE_WICKET")) dismissalType = "lbw";
+      if (a.status === "OUT") {
+        if (dismissedBy(shared, a.id, "CAUGHT")) dismissalType = "caught";
+        else if (dismissedBy(shared, a.id, "RUN_OUT")) dismissalType = "run out";
+        else if (dismissedBy(shared, a.id, "STUMPED")) dismissalType = "stumped";
+        else if (dismissedBy(shared, a.id, "BOWLED")) dismissalType = "bowled";
+        else if (dismissedBy(shared, a.id, "LEG_BEFORE_WICKET")) dismissalType = "lbw";
+        else dismissalType = "out";
+      }
       return { playerShortName: fullName(a.id), runsScored: stat(a.statistics, "TOTAL_RUNS"), ballsFaced: stat(a.statistics, "BALLS_FACED"), dismissalType };
     });
     const bowling = (bowlingTeam ? bowlingTeam.appearances || [] : [])
