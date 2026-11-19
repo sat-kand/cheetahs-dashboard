@@ -691,7 +691,10 @@ function selectXII(players) {
    seasonCount defaults to 2 (Play Cricket's one season per half-year, overlapping at the boundary);
    PlayHQ instead gives several concurrent season records per half-year, one per competition
    (Senior, the Sunday T20 side, each junior division), so a PlayHQ-backed caller passes more. */
-async function findLastRound(api, now, seasonCount) {
+function findLastRound(api, now, seasonCount) {
+  return phqMemo(api, "lastRound" + (seasonCount || 2), () => findLastRoundNow(api, now, seasonCount));
+}
+async function findLastRoundNow(api, now, seasonCount) {
   const seasons = newestSeasons(await api.getSeasons(), now, seasonCount || 2);
   const teamIds = await teamIdsFor(api, seasons);
   const today = ymdSydney(now);
@@ -700,22 +703,21 @@ async function findLastRound(api, now, seasonCount) {
      per distinct team, not per attempt - otherwise one flaky team can be counted twice and the "could not read
      N teams" note can claim more teams failed than the club actually has. */
   const failedIds = new Set();
-  for (const s of seasons) {
-    const teams = (await api.getTeams(s.id)).filter(isSeniorTeam);
-    await mapLimit(teams, 6, async t => {
-      let list;
-      try { list = await api.getTeamMatches(t.id); } catch (e) { failedIds.add(t.id); return; }
-      for (const m of list) {
-        if (m.matchType === "BYE" || !m.round) continue;
-        const key = s.id + "|" + m.round.name;
-        const r = rounds.get(key) || { key, seasonId: s.id, season: s.name, name: m.round.name, matches: new Map() };
-        /* matches not yet scheduled can have no dates at all */
-        const days = (m.matchSchedule || []).map(x => parseDate(x.startDateTime)).filter(d => !isNaN(d)).map(ymdSydney).sort();
-        r.matches.set(m.id, { id: m.id, status: m.status, first: days[0] || "", last: days[days.length - 1] || "" });
-        rounds.set(key, r);
-      }
-    });
-  }
+  /* every team of every season at once, rather than season by season */
+  const pairs = await seasonTeams(api, seasons, isSeniorTeam);
+  await mapLimit(pairs, 10, async ({ s, t }) => {
+    let list;
+    try { list = await api.getTeamMatches(t.id); } catch (e) { failedIds.add(t.id); return; }
+    for (const m of list) {
+      if (m.matchType === "BYE" || !m.round) continue;
+      const key = s.id + "|" + m.round.name;
+      const r = rounds.get(key) || { key, seasonId: s.id, season: s.name, name: m.round.name, matches: new Map() };
+      /* matches not yet scheduled can have no dates at all */
+      const days = (m.matchSchedule || []).map(x => parseDate(x.startDateTime)).filter(d => !isNaN(d)).map(ymdSydney).sort();
+      r.matches.set(m.id, { id: m.id, status: m.status, first: days[0] || "", last: days[days.length - 1] || "" });
+      rounds.set(key, r);
+    }
+  });
   const played = [...rounds.values()].filter(r => r.matches.size)
     .map(r => ({ ...r, first: [...r.matches.values()].map(m => m.first).filter(Boolean).sort()[0] || "", last: [...r.matches.values()].map(m => m.last).filter(Boolean).sort().pop() || "" }))
     .filter(r => r.last && r.last <= today)
@@ -841,7 +843,10 @@ function juniorHighRank(label) {
    takes its latest match from the most recent week of junior cricket (the same matches as the Junior Scores tab). */
 /* Each junior team's latest match: the most recent week of junior cricket, plus the week before for age groups that
    play fortnightly. Shared by Junior Highlights and the junior scorecard audit. */
-async function latestJuniorMatches(api, now) {
+function latestJuniorMatches(api, now) {
+  return phqMemo(api, "latestJunior", () => latestJuniorMatchesNow(api, now));
+}
+async function latestJuniorMatchesNow(api, now) {
   await loadJuniorCoaches();
   /* PlayHQ-backed: several concurrent season records per half-year, so more of the newest seasons
      need checking than a single-season-per-half-year source would need. */
@@ -852,20 +857,19 @@ async function latestJuniorMatches(api, now) {
      newest season records, so counting every failed attempt could report more teams failed than
      the club actually has. */
   const failedIds = new Set();
-  for (const s of seasons) {
-    const teams = (await api.getTeams(s.id)).filter(isJuniorTeam);
-    await mapLimit(teams, 6, async t => {
-      let list;
-      try { list = await api.getTeamMatches(t.id); } catch (e) { failedIds.add(t.id); return; }
-      for (const m of list) {
-        if (m.matchType === "BYE" || !m.round) continue;
-        const days = (m.matchSchedule || []).map(x => parseDate(x.startDateTime)).filter(d => !isNaN(d)).map(ymdSydney).sort();
-        if (!days.length || days[0] > today) continue;
-        started.push({ teamId: t.id, label: juniorLabel(t), gradeName: (t.grade && t.grade.name) || "", seasonId: s.id, season: s.name, matchId: m.id, status: m.status,
-          roundName: m.round.name, first: days[0], last: days[days.length - 1] });
-      }
-    });
-  }
+  /* every team of every season at once, rather than season by season */
+  const pairs = await seasonTeams(api, seasons, isJuniorTeam);
+  await mapLimit(pairs, 10, async ({ s, t }) => {
+    let list;
+    try { list = await api.getTeamMatches(t.id); } catch (e) { failedIds.add(t.id); return; }
+    for (const m of list) {
+      if (m.matchType === "BYE" || !m.round) continue;
+      const days = (m.matchSchedule || []).map(x => parseDate(x.startDateTime)).filter(d => !isNaN(d)).map(ymdSydney).sort();
+      if (!days.length || days[0] > today) continue;
+      started.push({ teamId: t.id, label: juniorLabel(t), gradeName: (t.grade && t.grade.name) || "", seasonId: s.id, season: s.name, matchId: m.id, status: m.status,
+        roundName: m.round.name, first: days[0], last: days[days.length - 1] });
+    }
+  });
   const failedTeams = failedIds.size;
   if (!started.length) return { picked: [], failedTeams };
   const week = mondayOf(started.map(e => e.first).sort().pop());
@@ -1324,40 +1328,39 @@ async function buildScores(api, now, kind) {
      newest season records, so counting every failed attempt could report more teams failed than
      the club actually has. */
   const failedIds = new Set();
-  for (const s of seasons) {
-    const teams = (await api.getTeams(s.id)).filter(K.filter);
-    teams.forEach(t => { ourTeams.add(t.id); teamInfo.set(t.id, { grade: K.label(t), rank: K.rank(K.label(t)), seasonId: s.id }); });
-    await mapLimit(teams, 6, async t => {
-      let list;
-      try { list = await api.getTeamMatchesFresh(t.id); } catch (e) { failedIds.add(t.id); return; }
-      const grade = K.label(t), rank = K.rank(grade);
-      for (const m of list) {
-        if (!m.round) continue;
-        const base = { teamId: t.id, key: s.id + "|" + m.round.name, roundName: m.round.name, season: s.name };
-        /* A bye's own date, when PlayHQ gives one - used as a fallback below when the bye's round
-           name doesn't line up with the rest of its round (its name can come through blank or
-           differently-formed than a real fixture's, since it has no opponent to carry it). */
-        const byeDays = (m.matchSchedule || []).map(x => parseDate(x.startDateTime)).filter(d => !isNaN(d)).map(ymdSydney).sort();
-        if (m.matchType === "BYE") {
-          byes.push({ ...base, first: byeDays[0] || "", last: byeDays[byeDays.length - 1] || "",
-            row: { id: "bye" + t.id, grade, rank, outcome: "bye", us: [], them: { name: "", innings: [] } } });
-          continue;
-        }
-        const days = byeDays;
-        if (!days.length) continue;
-        const us = (m.teams || []).find(x => x.id === t.id) || null;
-        const them = (m.teams || []).find(x => x.id !== t.id) || null;
-        const club = them && them.owningOrganisation && (them.owningOrganisation.name || them.owningOrganisation.shortName);
-        let outcome = matchOutcome(m, us, them);
-        if (outcome === "upcoming" && days[0] <= today) outcome = "pending"; /* should have started, nothing entered yet */
-        const venue = (m.venue && (m.venue.name || (m.venue.playingSurface && m.venue.playingSurface.name))) || "";
-        /* a match between two of our teams gets a row for each of them */
-        all.push({ ...base, first: days[0], last: days[days.length - 1],
-          row: { id: m.id, venue: String(venue).trim(), time: m.startTime || "", grade, rank, outcome, usId: us && us.id, themId: them && them.id,
-            us: inningsFromText(us), them: { name: "", club, display: them && them.displayName, innings: inningsFromText(them) } } });
+  /* every team of every season at once, rather than season by season */
+  const pairs = await seasonTeams(api, seasons, K.filter);
+  pairs.forEach(({ s, t }) => { ourTeams.add(t.id); teamInfo.set(t.id, { grade: K.label(t), rank: K.rank(K.label(t)), seasonId: s.id }); });
+  await mapLimit(pairs, 10, async ({ s, t }) => {
+    let list;
+    try { list = await api.getTeamMatches(t.id); } catch (e) { failedIds.add(t.id); return; }
+    const grade = K.label(t), rank = K.rank(grade);
+    for (const m of list) {
+      if (!m.round) continue;
+      const base = { teamId: t.id, key: s.id + "|" + m.round.name, roundName: m.round.name, season: s.name };
+      /* A bye's own date, when PlayHQ gives one - used as a fallback below when the bye's round
+         name doesn't line up with the rest of its round (its name can come through blank or
+         differently-formed than a real fixture's, since it has no opponent to carry it). */
+      const byeDays = (m.matchSchedule || []).map(x => parseDate(x.startDateTime)).filter(d => !isNaN(d)).map(ymdSydney).sort();
+      if (m.matchType === "BYE") {
+        byes.push({ ...base, first: byeDays[0] || "", last: byeDays[byeDays.length - 1] || "",
+          row: { id: "bye" + t.id, grade, rank, outcome: "bye", us: [], them: { name: "", innings: [] } } });
+        continue;
       }
-    });
-  }
+      const days = byeDays;
+      if (!days.length) continue;
+      const us = (m.teams || []).find(x => x.id === t.id) || null;
+      const them = (m.teams || []).find(x => x.id !== t.id) || null;
+      const club = them && them.owningOrganisation && (them.owningOrganisation.name || them.owningOrganisation.shortName);
+      let outcome = matchOutcome(m, us, them);
+      if (outcome === "upcoming" && days[0] <= today) outcome = "pending"; /* should have started, nothing entered yet */
+      const venue = (m.venue && (m.venue.name || (m.venue.playingSurface && m.venue.playingSurface.name))) || "";
+      /* a match between two of our teams gets a row for each of them */
+      all.push({ ...base, first: days[0], last: days[days.length - 1],
+        row: { id: m.id, venue: String(venue).trim(), time: m.startTime || "", grade, rank, outcome, usId: us && us.id, themId: them && them.id,
+          us: inningsFromText(us), them: { name: "", club, display: them && them.displayName, innings: inningsFromText(them) } } });
+    }
+  });
   for (const e of all) {
     const t = e.row.them;
     t.name = (e.row.themId && ourTeams.has(e.row.themId) ? "" : shortClub(t.club)) || t.display || "Opponent";
@@ -1452,9 +1455,9 @@ async function buildScores(api, now, kind) {
   const round = { name, season, first: dated.map(e => e.first).sort()[0], last: dated.map(e => e.last).sort().pop() };
   const rows = picked.map(e => e.row).sort((a, b) => a.rank - b.rank || a.grade.localeCompare(b.grade) || a.them.name.localeCompare(b.them.name));
   /* the scorecard has the overs of every innings; keep the fixture figures if it cannot be read */
-  if (api.getScorecardFresh) {
+  if (api.getScorecard) {
     const cards = new Map(); /* one lookup per match, even when two of our teams share it */
-    const card = id => { if (!cards.has(id)) cards.set(id, api.getScorecardFresh(id)); return cards.get(id); };
+    const card = id => { if (!cards.has(id)) cards.set(id, api.getScorecard(id)); return cards.get(id); };
     await mapLimit(rows.filter(r => r.usId && r.outcome !== "upcoming" && r.outcome !== "pending"), 6, async r => {
       try {
         const sc = await card(r.id);
@@ -1466,10 +1469,10 @@ async function buildScores(api, now, kind) {
   }
   /* An upcoming game whose team sheet for our side has no players yet gets flagged. A lookup that fails is left unflagged
      rather than guessed at. */
-  if (api.getScorecardFresh) {
+  if (api.getScorecard) {
     await mapLimit(rows.filter(r => r.usId && r.outcome === "upcoming"), 6, async r => {
       try {
-        const sc = await api.getScorecardFresh(r.id);
+        const sc = await api.getScorecard(r.id);
         const side = sc && (sc.teams || []).find(t => t.id === r.usId);
         r.noTeamList = !side || !(side.players || []).length;
       } catch (e) { /* leave unflagged */ }
@@ -1932,20 +1935,70 @@ const PHQ_PROXY_BASE = "https://cheetahs-playhq-proxy.sathish-kswami.workers.dev
    never cached and never read from the cache, so nothing changes for them. */
 const PHQ_HTTP_CACHE = new Map();
 function phqClearCache() { PHQ_HTTP_CACHE.clear(); }
+/* PlayHQ responses are kept in two places so every tab shares them:
+   - in memory for this visit (PHQ_HTTP_CACHE): each URL is fetched at most once, whichever tab asks first;
+   - in the browser's Cache Storage between visits, for data that rarely or never changes: season and team lists
+     (12 hours) and the summaries of finished games (12 hours). Fixtures and unfinished games are never kept between
+     visits, so scores in progress are always current.
+   A tab's Refresh button calls phqReset(), which drops both, so a corrected scorecard shows straight away. */
+const PHQ_STORE = "phq-v1";
+const PHQ_KEEP_MS = 12 * 3600 * 1000;
+const phqStorable = path => /\/(seasons|teams|grades)$/.test(path) || /\/games\/[^/]+\/summary$/.test(path);
+const phqFinished = (path, j) => !/\/summary$/.test(path) || String(((j && j.data) || j || {}).status || "").toUpperCase() === "FINAL";
+async function phqStoreGet(path) {
+  try {
+    if (!phqStorable(path) || !window.caches) return null;
+    const c = await caches.open(PHQ_STORE);
+    const r = await c.match(PHQ_PROXY_BASE + path);
+    if (!r) return null;
+    if (Date.now() - Number(r.headers.get("x-saved") || 0) > PHQ_KEEP_MS) { c.delete(PHQ_PROXY_BASE + path); return null; }
+    return await r.json();
+  } catch (e) { return null; }
+}
+function phqStorePut(path, text, j) {
+  try {
+    if (!phqStorable(path) || !window.caches || !phqFinished(path, j)) return;
+    caches.open(PHQ_STORE).then(c => c.put(PHQ_PROXY_BASE + path, new Response(text, { headers: { "Content-Type": "application/json", "x-saved": String(Date.now()) } }))).catch(() => {});
+  } catch (e) { /* storage unavailable: memory only */ }
+}
 async function phqJSON(path, opts) {
   const fresh = opts && opts.fresh;
   if (!fresh && PHQ_HTTP_CACHE.has(path)) return PHQ_HTTP_CACHE.get(path);
   const p = (async () => {
+    if (!fresh) { const kept = await phqStoreGet(path); if (kept) return kept; }
     const r = await fetch(PHQ_PROXY_BASE + path);
     if (!r.ok) throw new Error("HTTP " + r.status);
     const t = await r.text();
-    return t ? JSON.parse(t) : {};
+    const j = t ? JSON.parse(t) : {};
+    phqStorePut(path, t, j);
+    return j;
   })();
-  if (!fresh) {
-    PHQ_HTTP_CACHE.set(path, p);
-    p.catch(() => { if (PHQ_HTTP_CACHE.get(path) === p) PHQ_HTTP_CACHE.delete(path); });
-  }
+  /* a fresh read also replaces what is remembered, so the other tabs use the newer copy */
+  PHQ_HTTP_CACHE.set(path, p);
+  p.catch(() => { if (PHQ_HTTP_CACHE.get(path) === p) PHQ_HTTP_CACHE.delete(path); });
   return p;
+}
+/* One PlayHQ connection shared by every tab, so what one tab has worked out (rosters, rounds) the others reuse. */
+let PHQ_SHARED = null;
+function phq() { return PHQ_SHARED || (PHQ_SHARED = makePhqApi()); }
+function phqReset() {
+  PHQ_HTTP_CACHE.clear();
+  PHQ_SHARED = null;
+  try { if (window.caches) caches.delete(PHQ_STORE); } catch (e) { /* nothing kept */ }
+}
+/* Every club team of the given seasons, fetched for all seasons at once. */
+async function seasonTeams(api, seasons, filter) {
+  const lists = await Promise.all(seasons.map(async s => ({ s, teams: (await api.getTeams(s.id)).filter(filter) })));
+  return lists.flatMap(({ s, teams }) => teams.map(t => ({ s, t })));
+}
+/* Per-connection memo for whole computations several tabs need (the last completed round, each junior team's latest
+   match), so the second tab to ask gets the first one's answer. */
+const PHQ_MEMO = new WeakMap();
+function phqMemo(api, key, fn) {
+  if (!PHQ_MEMO.has(api)) PHQ_MEMO.set(api, new Map());
+  const m = PHQ_MEMO.get(api);
+  if (!m.has(key)) { const p = fn(); m.set(key, p); p.catch(() => { if (m.get(key) === p) m.delete(key); }); }
+  return m.get(key);
 }
 /* Follows PlayHQ's cursor pagination (metadata.hasMore / metadata.nextCursor) until it stops. */
 async function phqPaged(path, opts) {
@@ -2490,7 +2543,7 @@ async function loadXII() {
   btn.disabled = true; btn.textContent = "Refreshing…";
   xii.state = "loading"; renderXII();
   try {
-    const data = await buildClubXII(makePhqApi(), new Date());
+    const data = await buildClubXII(phq(), new Date());
     if (run !== xiiRun) return;
     xii = { state: "ok", data, at: new Date().toISOString() };
   } catch (e) {
@@ -2500,7 +2553,7 @@ async function loadXII() {
     if (run === xiiRun) { renderXII(); btn.disabled = false; btn.textContent = "Refresh"; }
   }
 }
-$("x-refresh").addEventListener("click", loadXII);
+$("x-refresh").addEventListener("click", () => { phqReset(); loadXII(); });
 $("x-copy").addEventListener("click", async e => {
   const btn = e.currentTarget;
   try { await navigator.clipboard.writeText(xiiText()); btn.textContent = "Copied"; }
@@ -2618,7 +2671,7 @@ async function loadHL() {
   btn.disabled = true; btn.textContent = "Refreshing…";
   hl.state = "loading"; renderHL();
   try {
-    const api = makePhqApi();
+    const api = phq();
     const [senior, junior] = await Promise.all([buildFifties(api, new Date()), buildJuniorHighlights(api, new Date())]);
     if (run !== hlRun) return;
     hl = { state: "ok", data: { senior, junior }, at: new Date().toISOString() };
@@ -2629,7 +2682,7 @@ async function loadHL() {
     if (run === hlRun) { renderHL(); btn.disabled = false; btn.textContent = "Refresh"; }
   }
 }
-$("h-refresh").addEventListener("click", loadHL);
+$("h-refresh").addEventListener("click", () => { phqReset(); loadHL(); });
 $("h-copy").addEventListener("click", async e => {
   const btn = e.currentTarget;
   try { await navigator.clipboard.writeText(hlText(hlView)); btn.textContent = "Copied"; }
@@ -2728,8 +2781,8 @@ async function loadAudit() {
   btn.disabled = true; btn.textContent = "Refreshing…";
   auditViews[which].state = "loading"; renderAudit();
   try {
-    const data = which === "junior" ? await buildJuniorAudit(makePhqApi(), new Date())
-                                    : await buildAudit(makePhqApi(), new Date(), { checkKeeper: false, seasonCount: 8 });
+    const data = which === "junior" ? await buildJuniorAudit(phq(), new Date())
+                                    : await buildAudit(phq(), new Date(), { checkKeeper: false, seasonCount: 8 });
     auditViews[which] = { state: "ok", data, at: new Date().toISOString() };
   } catch (e) {
     auditViews[which].state = "error";
@@ -2744,7 +2797,7 @@ document.querySelectorAll("#seg-audit button").forEach(b => b.addEventListener("
   renderAudit();
   if (auditViews[auditView].state === "idle") loadAudit();
 }));
-$("a-refresh").addEventListener("click", loadAudit);
+$("a-refresh").addEventListener("click", () => { phqReset(); loadAudit(); });
 $("a-copy").addEventListener("click", async e => {
   const btn = e.currentTarget;
   try { await navigator.clipboard.writeText(auditText()); btn.textContent = "Copied"; }
@@ -2859,7 +2912,7 @@ function scoresTab(prefix, kind, word) {
     btn.disabled = true; btn.textContent = "Refreshing…";
     state.state = "loading"; render();
     try {
-      const data = await buildScores(makePhqApi(), new Date(), kind);
+      const data = await buildScores(phq(), new Date(), kind);
       if (run !== runNo) return;
       state = { state: "ok", data, at: new Date().toISOString() };
     } catch (e) {
@@ -2869,7 +2922,7 @@ function scoresTab(prefix, kind, word) {
       if (run === runNo) { render(); btn.disabled = false; btn.textContent = "Refresh"; }
     }
   }
-  $(prefix + "-refresh").addEventListener("click", load);
+  $(prefix + "-refresh").addEventListener("click", () => { phqReset(); load(); });
   $(prefix + "-copy").addEventListener("click", async e => {
     const btn = e.currentTarget;
     try { await navigator.clipboard.writeText(text()); btn.textContent = "Copied"; }
@@ -3003,12 +3056,12 @@ function showTab(name, updateHash) {
   for (const t of document.querySelectorAll(".tab")) t.setAttribute("aria-selected", String(t.dataset.tab === name));
   for (const n of ["milestones", "xii", "hl", "audit", "scores", "jscores", "records"]) $("panel-" + n).hidden = name !== n;
   if (updateHash) history.replaceState(null, "", name === "xii" ? "#club-xii" : name === "hl" ? "#highlights" : name === "audit" ? "#audit" : name === "scores" ? "#scores" : name === "jscores" ? "#junior-scores" : name === "milestones" ? "#milestones" : name === "records" ? "#records" : location.pathname + location.search);
-  if (name === "xii") { if (xii.state === "idle") loadXII(); }
-  else if (name === "hl") { if (hl.state === "idle") loadHL(); }
-  else if (name === "audit") { if (auditViews[auditView].state === "idle") loadAudit(); }
-  else if (name === "scores") { if (seniorScores.get().state === "idle") seniorScores.load(); }
-  else if (name === "jscores") { if (juniorScores.get().state === "idle") juniorScores.load(); }
-  else if (name === "records") { if (recViews[recView].state === "idle") loadRecords(); }
+  if (name === "xii") { if (xii.state === "idle") return loadXII(); }
+  else if (name === "hl") { if (hl.state === "idle") return loadHL(); }
+  else if (name === "audit") { if (auditViews[auditView].state === "idle") return loadAudit(); }
+  else if (name === "scores") { if (seniorScores.get().state === "idle") return seniorScores.load(); }
+  else if (name === "jscores") { if (juniorScores.get().state === "idle") return juniorScores.load(); }
+  else if (name === "records") { if (recViews[recView].state === "idle") return loadRecords(); }
   else if (name === "milestones" && !milestonesLoaded) { milestonesLoaded = true; refresh(); }
 }
 document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => showTab(t.dataset.tab, true)));
@@ -3019,7 +3072,19 @@ document.querySelector(".tabs").addEventListener("keydown", e => {
   next.focus(); showTab(next.dataset.tab, true);
 });
 sections.forEach(renderSection); renderWatch();
-showTab(location.hash === "#club-xii" ? "xii" : location.hash === "#highlights" ? "hl" : location.hash === "#audit" ? "audit" : location.hash === "#scores" ? "scores" : location.hash === "#junior-scores" ? "jscores" : location.hash === "#milestones" ? "milestones" : location.hash === "#records" ? "records" : "scores", false);
+/* Once the opening tab has loaded, the other PlayHQ tabs load quietly in the background, one after another, so they
+   are ready when opened. They reuse everything already fetched, so this costs only what each tab adds. */
+async function preloadTabs() {
+  const steps = [
+    () => seniorScores.get().state === "idle" && seniorScores.load(),
+    () => xii.state === "idle" && loadXII(),
+    () => auditView === "senior" && auditViews.senior.state === "idle" && loadAudit(),
+    () => hl.state === "idle" && loadHL(),
+    () => juniorScores.get().state === "idle" && juniorScores.load()
+  ];
+  for (const step of steps) { try { await step(); } catch (e) { /* a tab that fails shows its own error when opened */ } }
+}
+Promise.resolve(showTab(location.hash === "#club-xii" ? "xii" : location.hash === "#highlights" ? "hl" : location.hash === "#audit" ? "audit" : location.hash === "#scores" ? "scores" : location.hash === "#junior-scores" ? "jscores" : location.hash === "#milestones" ? "milestones" : location.hash === "#records" ? "records" : "scores", false)).catch(() => {}).finally(() => setTimeout(preloadTabs, 200));
 </script>
 </body>
 </html>
