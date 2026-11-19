@@ -834,6 +834,7 @@ function juniorHighRank(label) {
 /* Junior innings of HL_JUNIOR_MIN_RUNS or more. Junior grades number rounds separately, so for each junior team this
    takes its latest match from the most recent week of junior cricket (the same matches as the Junior Scores tab). */
 async function buildJuniorHighlights(api, now) {
+  await loadJuniorCoaches();
   /* PlayHQ-backed: several concurrent season records per half-year, so more of the newest seasons
      need checking than a single-season-per-half-year source would need. */
   const seasons = newestSeasons(await api.getSeasons(), now, 8);
@@ -1108,7 +1109,21 @@ function isJuniorTeam(t) {
    gradeLabel (t.grade.name, with that same brand suffix appended) whenever the name has no grade in it. */
 /* PlayHQ names a junior team only by its colour ("Parramatta CCC White", with the age group in the grade name), and has no
    coach at all. The coach shown in brackets is kept here by hand, keyed by the label without it. */
-const JUNIOR_COACHES = { "U10 White": "Murali", "U10 Blue": "Parveen", "Girls Stage 1 Brown": "Surendra" };
+const JUNIOR_COACHES = {};
+/* Coach names come from Play Cricket's junior team names ("Juniors U10 White(Murali)" -> "U10 White": "Murali"),
+   read once per page load. If Play Cricket can't be reached, teams just show without a coach. */
+let juniorCoachesLoad = null;
+function loadJuniorCoaches() {
+  if (!juniorCoachesLoad) juniorCoachesLoad = (async () => {
+    const api = makeApi();
+    const seasons = newestSeasons(await api.getSeasons(), new Date(), 2);
+    for (const s of seasons) for (const t of await api.getTeams(s.id)) {
+      const m = String(t.name || "").match(/^(?:juniors?\s+)?(.+?)\s*\(\s*([^)]+?)\s*\)\s*$/i);
+      if (m && !/^seniors?\b/i.test(t.name) && !JUNIOR_COACHES[m[1]]) JUNIOR_COACHES[m[1].replace(/\s+/g, " ")] = m[2];
+    }
+  })().catch(() => { juniorCoachesLoad = null; });
+  return juniorCoachesLoad;
+}
 function juniorLabel(t) {
   const pq = String(t.name || "").match(/^parramatta ccc\s*(?:\(\s*(.+?)\s*\)|\s(.+))$/i); /* makePhqApi gives "Parramatta CCC (White)" */
   if (pq) pq[1] = pq[1] || pq[2];
@@ -1148,6 +1163,7 @@ function mondayOf(ymd) {
    api adds getTeamMatchesFresh(teamId) and getScorecardFresh(matchId), which are not remembered between refreshes. */
 async function buildScores(api, now, kind) {
   const K = SCORE_KINDS[kind || "senior"];
+  if (kind === "junior") await loadJuniorCoaches();
   /* PlayHQ (both Senior and Junior Scores are PlayHQ-backed) gives several concurrent season
      records per half-year, one per competition (see findLastRound), so more of the newest seasons
      need checking than a single-season-per-half-year source would need, to be sure of including
@@ -1905,6 +1921,7 @@ function phqAdaptScorecard(d) {
     const fielding = (bowlingTeam ? bowlingTeam.appearances || [] : []).map(a => ({
       playerShortName: fullName(a.id), participantId: a.id,
       totalCatches: stat(a.statistics, "TOTAL_CATCHES"),
+      keeperCatches: stat(a.statistics, "CATCHES_AS_WICKET_KEEPER"),
       stumpings: (shared || []).filter(s => s.type === "STUMPED" && (s.appearances || []).some(x => x.role === "FIELDING" && x.id === a.id)).length,
       runOuts: (shared || []).filter(s => s.type === "RUN_OUT" && (s.appearances || []).some(x => x.role === "FIELDING" && x.id === a.id)).length
     }));
@@ -1960,7 +1977,7 @@ function makePhqApi() {
          told apart from the keeper's - wicketKeeperCatches is always reported as 0 here, same
          "degrade to unknown rather than guess wrong" choice already made for the Audit keeper
          check. A stumping can only be the keeper's, so that figure alone stays reliable. */
-      for (const f of (inn.fielding || [])) recFor(f.participantId).fieldingStatistics.push({ wicketKeeperCatches: 0, stumpings: f.stumpings });
+      for (const f of (inn.fielding || [])) recFor(f.participantId).fieldingStatistics.push({ wicketKeeperCatches: f.keeperCatches || 0, stumpings: f.stumpings });
     }
   };
   return {
