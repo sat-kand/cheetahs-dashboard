@@ -1626,10 +1626,7 @@ function makeApi() {
    - No wicketkeeper-role field anywhere, so the "no keeper marked" audit check is always skipped
      for PlayHQ-backed audits (see auditTeam's checkKeeper option) rather than firing on every team. */
 const PHQ_ORG = "b0196c19-88f5-487a-9f5e-c7aa1115584d";
-/* Fill in after deploying the worker (see worker/README.md) - something like
-   "https://cheetahs-playhq-proxy.<your-subdomain>.workers.dev". Senior Scores and Audit throw
-   until this is set, same as any other fetch failure. */
-const PHQ_PROXY_BASE = "";
+const PHQ_PROXY_BASE = "https://cheetahs-playhq-proxy.sathish-kswami.workers.dev";
 
 async function phqJSON(path) {
   const r = await fetch(PHQ_PROXY_BASE + path);
