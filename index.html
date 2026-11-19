@@ -426,7 +426,7 @@ td.num { font-weight: 700; color: var(--heading); }
     </div>
     <section class="block" aria-labelledby="h-audit">
       <h2 id="h-audit">Senior scorecard audit</h2>
-      <p class="blurb">Checks each senior team's scorecard for the club's most recently played round: that it's finalised in Play Cricket, a wicketkeeper is marked in the team sheet, batting and bowling totals add up, every catch, stumping and run out is credited to a fielder, and no player's name is hidden.</p>
+      <p class="blurb">Checks each senior team's scorecard for the club's most recently played round: that it's finalised, batting and bowling totals add up, every catch, stumping and run out is credited to a fielder, and no player's name is hidden.</p>
       <div class="summary" id="a-summary">Loading the most recently played round…</div>
       <div class="grid xii-grid" id="a-grid"></div>
     </section>
@@ -893,7 +893,11 @@ function isHiddenName(n) {
 const ordinal = n => n + (n === 1 ? "st" : n === 2 ? "nd" : n === 3 ? "rd" : "th");
 /* Checks for one club team in one match. sc = scorecard with lower-case keys; clubTeamId = our team in it.
    Returns [{ type: "batting" | "bowling" | "fielding" | "names" | "keeper", text }]. */
-function auditTeam(sc, clubTeamId) {
+function auditTeam(sc, clubTeamId, opts) {
+  /* PlayHQ's scorecard data has no wicketkeeper-role field at all (see worker/README.md),
+     so a PlayHQ-backed audit passes checkKeeper: false - without it, this check would
+     wrongly fire "no keeper marked" on every single team, since none ever have a role. */
+  const checkKeeper = !opts || opts.checkKeeper !== false;
   const issues = [];
   const add = (type, text) => issues.push({ type, text });
   const num = v => Number(v) || 0;
@@ -903,7 +907,7 @@ function auditTeam(sc, clubTeamId) {
   for (const p of (us.players || [])) {
     if (isHiddenName(p.name)) add("names", "A player in the team list has a hidden name (shown as \"" + (String(p.name || "").trim() || "blank") + "\").");
   }
-  if ((us.players || []).length && !(us.players || []).some(p => (p.roles || []).some(r => /keeper/i.test(r)))) {
+  if (checkKeeper && (us.players || []).length && !(us.players || []).some(p => (p.roles || []).some(r => /keeper/i.test(r)))) {
     add("keeper", "No wicketkeeper is marked in the team sheet.");
   }
   /* Only numbered "1st", "2nd" when a side batted more than once (a multi-day match); a single innings each needs no number. */
@@ -984,14 +988,14 @@ function statusLabel(s) {
 /* Audit every senior team's scorecard for the most recently played round. A team whose match is
    still live, pending or at stumps gets a "status" issue added on top of the usual checks, since
    the scorecard can still change before the match is finalised. api adds getScorecard(matchId). */
-async function buildAudit(api, now) {
+async function buildAudit(api, now, opts) {
   const { round, failedTeams, teamIds } = await findLastRound(api, now);
   if (!round) return { round: null, failedTeams };
   const teams = [];
   await mapLimit([...round.matches.keys()], 4, async id => {
     const status = (round.matches.get(id) || {}).status;
     const notFinal = NOT_FINISHED.has(status);
-    const statusIssue = () => notFinal ? [{ type: "status", text: "Still shown as \"" + statusLabel(status) + "\" in Play Cricket, not finalised — these figures can still change." }] : [];
+    const statusIssue = () => notFinal ? [{ type: "status", text: "Still shown as \"" + statusLabel(status) + "\", not finalised — these figures can still change." }] : [];
     let sc = null;
     try { sc = await api.getScorecard(id); } catch (e) { sc = null; }
     if (!sc || !Array.isArray(sc.innings)) {
@@ -1010,7 +1014,7 @@ async function buildAudit(api, now) {
       if (!teamIds.has(t.id)) continue;
       const them = (sc.teams || []).find(x => x.id !== t.id);
       const grade = teamIds.get(t.id);
-      teams.push({ matchId: id, grade, name: t.displayName || t.name, opponent: them ? them.displayName || them.name : "", rank: gradeRank(grade), loaded: true, issues: [...statusIssue(), ...auditTeam(sc, t.id)] });
+      teams.push({ matchId: id, grade, name: t.displayName || t.name, opponent: them ? them.displayName || them.name : "", rank: gradeRank(grade), loaded: true, issues: [...statusIssue(), ...auditTeam(sc, t.id, opts)] });
     }
   });
   teams.sort((a, b) => a.rank - b.rank || String(a.name).localeCompare(String(b.name)));
@@ -1604,6 +1608,181 @@ function makeApi() {
   };
 }
 
+/* ---- PlayHQ adapter (Audit and senior Scores only) ----
+   Everything above still talks to Play Cricket via makeApi(); this talks to our own Cloudflare
+   Worker (see worker/README.md), which holds the PlayHQ key. It reshapes PlayHQ's responses into
+   the same shapes buildAudit/buildScores already expect from a Play Cricket scorecard and fixture
+   list, so neither of those functions needed to change.
+   Known gaps, both inherent to PlayHQ's public API rather than fixable here:
+   - No per-player match-history or season-leaderboard endpoint for cricket, so this adapter can't
+     support Club XII, Highlights, Milestones or the individual/career parts of Records - those
+     stay on makeApi().
+   - No wicketkeeper-role field anywhere, so the "no keeper marked" audit check is always skipped
+     for PlayHQ-backed audits (see auditTeam's checkKeeper option) rather than firing on every team. */
+const PHQ_ORG = "b0196c19-88f5-487a-9f5e-c7aa1115584d";
+/* Fill in after deploying the worker (see worker/README.md) - something like
+   "https://cheetahs-playhq-proxy.<your-subdomain>.workers.dev". Senior Scores and Audit throw
+   until this is set, same as any other fetch failure. */
+const PHQ_PROXY_BASE = "";
+
+async function phqJSON(path) {
+  const r = await fetch(PHQ_PROXY_BASE + path);
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  const t = await r.text();
+  return t ? JSON.parse(t) : {};
+}
+/* Follows PlayHQ's cursor pagination (metadata.hasMore / metadata.nextCursor) until it stops. */
+async function phqPaged(path) {
+  let cursor = null, all = [];
+  for (let i = 0; i < 20; i++) {
+    const url = path + (cursor ? (path.includes("?") ? "&" : "?") + "cursor=" + encodeURIComponent(cursor) : "");
+    const j = await phqJSON(url);
+    all = all.concat(j.data || []);
+    if (!j.metadata || !j.metadata.hasMore) break;
+    cursor = j.metadata.nextCursor;
+  }
+  return all;
+}
+/* PlayHQ's fixture status -> the status vocabulary the rest of the dashboard already understands
+   from Play Cricket (NOT_FINISHED, NOT_STARTED). Only FINAL/UPCOMING/ABANDONED are confirmed from
+   live data; anything else (a game actually in progress - live, at an innings break, etc.) falls
+   back to "LIVE", which keeps it correctly flagged as not finished rather than risking it being
+   read as complete. */
+function phqStatus(s) {
+  const up = String(s || "").toUpperCase();
+  if (up === "FINAL") return "COMPLETED";
+  if (up === "UPCOMING") return "UPCOMING";
+  if (up === "ABANDONED") return "ABANDONED";
+  if (up === "POSTPONED" || up === "CANCELLED") return "POSTPONED";
+  return "LIVE";
+}
+/* "WON_ON_FIRST_INNINGS" counts as a result for matchOutcome(); anything else becomes a
+   best-effort resultText so its draw/tie/abandoned regexes still have something to match. */
+function phqResultText(competitors) {
+  const mine = competitors[0], outcome = String((mine && mine.outcome) || "").toUpperCase();
+  if (/^WON/.test(outcome)) return "Match won";
+  if (/^LOST/.test(outcome)) return "Match lost";
+  if (outcome === "DRAWN" || outcome === "DRAW") return "Match drawn";
+  if (outcome === "TIED" || outcome === "TIE") return "Match tied";
+  if (/ABANDON|WASH|CANCEL|NO_RESULT/.test(outcome)) return "Match abandoned";
+  return outcome ? outcome.toLowerCase().replace(/_/g, " ") : "";
+}
+function phqIsWinner(outcome) { return /^WON/.test(String(outcome || "").toUpperCase()); }
+/* "Parramatta CCC Brown" becomes "Brown" - the bit that tells two same-grade Cheetahs teams apart
+   (PlayHQ's equivalent of Play Cricket's "(Brown)"/"(Gold)" suffix convention). */
+function phqTeamSuffix(teamName) { return String(teamName || "").replace(/^parramatta ccc\s*/i, "").trim(); }
+/* A PlayHQ wall-clock date+time in Australia/Sydney, as a UTC ISO instant. Sydney is UTC+10 or
+   +11 depending on daylight saving, so this guesses UTC first and corrects by whatever difference
+   that produces in Sydney's own clock - exact, since the offset is always a whole number of hours. */
+function phqLocalToISO(date, time) {
+  const guess = new Date(date + "T" + (time || "00:00:00") + "Z");
+  const parts = new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Sydney", hour: "2-digit", hour12: false }).formatToParts(guess);
+  const sydneyHour = Number((parts.find(p => p.type === "hour") || {}).value || 0) % 24;
+  const wantedHour = Number(String(time || "0").slice(0, 2)) || 0;
+  let diff = wantedHour - sydneyHour;
+  if (diff > 12) diff -= 24; else if (diff < -12) diff += 24;
+  return new Date(guess.getTime() + diff * 3600000).toISOString();
+}
+/* One PlayHQ Team Fixture Collection entry -> the match shape findLastRound/buildScores expect
+   from Play Cricket's getTeamMatches. PlayHQ gives the final score total per side here, but not
+   wickets-fallen or overs - those only come from the per-game Summary, via getScorecard(Fresh). */
+function phqFixtureToLegacy(g) {
+  const comps = g.competitors || [];
+  return {
+    id: g.id,
+    matchType: comps.length < 2 ? "BYE" : undefined,
+    round: { name: g.round && g.round.name },
+    status: phqStatus(g.status),
+    matchSchedule: (g.schedule && g.schedule.date) ? [{ startDateTime: phqLocalToISO(g.schedule.date, g.schedule.time) }] : [],
+    venue: { name: g.venue && g.venue.name },
+    resultText: phqResultText(comps),
+    teams: comps.map(c => ({ id: c.id, isWinner: phqIsWinner(c.outcome), displayName: c.name, owningOrganisation: { name: c.name } }))
+  };
+}
+/* One PlayHQ Public Game Summary (v2) -> the same shape buildAudit/buildScores already read from
+   a Play Cricket scorecard: { teams: [{id, name, players}], innings: [{...}] }. */
+function phqAdaptScorecard(d) {
+  const byId = new Map((d.appearances || []).map(a => [a.id, a]));
+  const fullName = id => { const a = byId.get(id); return a ? (a.firstName + " " + a.lastName).trim() : ""; };
+  const teams = (d.teams || []).map(t => ({
+    id: t.id, displayName: t.name, name: t.name,
+    players: (d.appearances || []).filter(a => a.teamId === t.id).map(a => ({ participantId: a.id, name: fullName(a.id), roles: [] }))
+  }));
+  const stat = (arr, type) => { const e = (arr || []).find(x => x.type === type); return e ? e.value : 0; };
+  const dismissedBy = (sharedStats, appearanceId, type) => (sharedStats || []).some(s => s.type === type &&
+    (s.appearances || []).some(x => x.role === "BATTING" && x.id === appearanceId));
+  const battedBefore = new Map();
+  const innings = [];
+  for (const period of (d.periods || [])) {
+    const battingTeam = (period.teams || []).find(t => t.discipline === "BATTING");
+    if (!battingTeam) continue;
+    const bowlingTeam = (period.teams || []).find(t => t.discipline === "BOWLING");
+    const already = battedBefore.get(battingTeam.id) || 0;
+    battedBefore.set(battingTeam.id, already + 1);
+    const closeStatus = String(battingTeam.status || "").toLowerCase().replace(/_/g, " ");
+    const shared = period.sharedStatistics;
+    const batting = (battingTeam.appearances || []).map(a => {
+      let dismissalType = "";
+      if (dismissedBy(shared, a.id, "CAUGHT")) dismissalType = "caught";
+      else if (dismissedBy(shared, a.id, "RUN_OUT")) dismissalType = "run out";
+      else if (dismissedBy(shared, a.id, "STUMPED")) dismissalType = "stumped";
+      else if (dismissedBy(shared, a.id, "BOWLED")) dismissalType = "bowled";
+      else if (dismissedBy(shared, a.id, "LEG_BEFORE_WICKET")) dismissalType = "lbw";
+      return { playerShortName: fullName(a.id), runsScored: stat(a.statistics, "TOTAL_RUNS"), ballsFaced: stat(a.statistics, "BALLS_FACED"), dismissalType };
+    });
+    const bowling = (bowlingTeam ? bowlingTeam.appearances || [] : [])
+      .filter(a => stat(a.statistics, "OVERS") > 0 || stat(a.statistics, "WICKETS") > 0 || stat(a.statistics, "RUNS") > 0)
+      .map(a => ({ playerShortName: fullName(a.id), runsConceded: stat(a.statistics, "RUNS"), oversBowled: stat(a.statistics, "OVERS") }));
+    const fielding = (bowlingTeam ? bowlingTeam.appearances || [] : []).map(a => ({
+      playerShortName: fullName(a.id), participantId: a.id,
+      totalCatches: stat(a.statistics, "TOTAL_CATCHES"),
+      stumpings: (shared || []).filter(s => s.type === "STUMPED" && (s.appearances || []).some(x => x.role === "FIELDING" && x.id === a.id)).length,
+      runOuts: (shared || []).filter(s => s.type === "RUN_OUT" && (s.appearances || []).some(x => x.role === "FIELDING" && x.id === a.id)).length
+    }));
+    innings.push({
+      battingTeamId: battingTeam.id, inningsNumber: already + 1,
+      runsScored: stat(battingTeam.statistics, "TOTAL_SCORE") || stat(battingTeam.statistics, "TOTALS"),
+      numberOfWicketsFallen: stat(battingTeam.statistics, "TOTAL_OUTS"),
+      oversBowled: stat(battingTeam.statistics, "TOTAL_OVERS"),
+      isDeclared: closeStatus === "declared", inningsCloseType: closeStatus,
+      byesRuns: stat(battingTeam.statistics, "EXTRA_BYES"), legByesRuns: stat(battingTeam.statistics, "EXTRA_LEG_BYES"),
+      wideBalls: stat(battingTeam.statistics, "EXTRA_WIDES"), noBalls: stat(battingTeam.statistics, "EXTRA_NO_BALLS"),
+      penalties: stat(battingTeam.statistics, "EXTRA_PENALTY_RUNS"), batting, bowling, fielding
+    });
+  }
+  return { teams, innings };
+}
+function makePhqApi() {
+  const memo = new Map();
+  const once = (key, fn) => {
+    if (!memo.has(key)) memo.set(key, fn().catch(e => { memo.delete(key); throw e; }));
+    return memo.get(key);
+  };
+  const teamsForSeason = async id => {
+    const teams = await phqPaged("/v1/seasons/" + id + "/teams");
+    return teams.filter(t => t.club && t.club.id === PHQ_ORG).map(t => {
+      const suffix = phqTeamSuffix(t.name);
+      return { id: t.id, name: suffix ? "Parramatta CCC (" + suffix + ")" : "Parramatta CCC", grade: { name: t.grade && t.grade.name } };
+    });
+  };
+  const scorecard = async id => {
+    const j = await phqJSON("/v2/games/" + id + "/summary");
+    return j.data ? phqAdaptScorecard(j.data) : null;
+  };
+  return {
+    getSeasons: () => once("seasons", () => phqPaged("/v1/organisations/" + PHQ_ORG + "/seasons")),
+    getTeams: id => once("teams" + id, () => teamsForSeason(id)),
+    getTeamMatches: id => once("tm" + id, async () => (await phqPaged("/v1/teams/" + id + "/fixture")).map(phqFixtureToLegacy)),
+    getTeamMatchesFresh: async id => (await phqPaged("/v1/teams/" + id + "/fixture")).map(phqFixtureToLegacy),
+    getScorecard: id => once("sc" + id, () => scorecard(id)),
+    getScorecardFresh: id => scorecard(id),
+    getMatch: id => once("match" + id, async () => {
+      const sc = await scorecard(id);
+      return { teams: (sc ? sc.teams : []).map(t => ({ id: t.id, name: t.name, displayName: t.displayName })) };
+    })
+  };
+}
+
 let asOf = new Date().toISOString();
 let activity = { state: "loading", map: new Map() }; /* who has played for the club in the last 8 months */
 
@@ -2072,7 +2251,7 @@ function renderAudit() {
   grid.innerHTML = "";
   if (audit.state === "loading" && !audit.data) { sum.textContent = "Loading the most recently played round…"; return; }
   if (audit.state === "error" && !audit.data) {
-    sum.innerHTML = '<span class="bad" style="margin:0">Could not load the round from Play Cricket. Press Refresh to try again.</span>';
+    sum.innerHTML = '<span class="bad" style="margin:0">Could not load the round. Press Refresh to try again.</span>';
     return;
   }
   const d = audit.data;
@@ -2103,7 +2282,7 @@ function renderAudit() {
     const vs = document.createElement("p"); vs.className = "vs"; vs.textContent = t.name + (t.opponent ? " v " + t.opponent : "");
     card.append(head, vs);
     if (!t.loaded) {
-      const p = document.createElement("p"); p.className = "bad"; p.style.margin = "0"; p.textContent = "Play Cricket did not return this scorecard."; card.appendChild(p);
+      const p = document.createElement("p"); p.className = "bad"; p.style.margin = "0"; p.textContent = "This scorecard could not be read."; card.appendChild(p);
     } else if (!t.issues.length) {
       const p = document.createElement("p"); p.className = "empty"; p.textContent = "Totals add up, dismissals are credited and no names are hidden."; card.appendChild(p);
     } else {
@@ -2141,7 +2320,7 @@ async function loadAudit() {
   btn.disabled = true; btn.textContent = "Refreshing…";
   audit.state = "loading"; renderAudit();
   try {
-    const data = await buildAudit(makeApi(), new Date());
+    const data = await buildAudit(makePhqApi(), new Date(), { checkKeeper: false });
     if (run !== auditRun) return;
     audit = { state: "ok", data, at: new Date().toISOString() };
   } catch (e) {
@@ -2181,7 +2360,7 @@ function scoresTab(prefix, kind, word) {
     const title = $(prefix + "-title"), list = $(prefix + "-list"), note = $(prefix + "-note");
     list.innerHTML = ""; note.textContent = "";
     if (state.state === "loading" && !state.data) { title.textContent = "Loading the current round…"; list.hidden = true; return; }
-    if (state.state === "error" && !state.data) { title.textContent = word + " scores"; note.textContent = "Could not load scores from Play Cricket. Press Refresh to try again."; list.hidden = true; return; }
+    if (state.state === "error" && !state.data) { title.textContent = word + " scores"; note.textContent = "Could not load scores. Press Refresh to try again."; list.hidden = true; return; }
     const d = state.data;
     if (!d.round) {
       list.hidden = true;
@@ -2247,7 +2426,7 @@ function scoresTab(prefix, kind, word) {
     btn.disabled = true; btn.textContent = "Refreshing…";
     state.state = "loading"; render();
     try {
-      const data = await buildScores(makeApi(), new Date(), kind);
+      const data = await buildScores(kind === "senior" ? makePhqApi() : makeApi(), new Date(), kind);
       if (run !== runNo) return;
       state = { state: "ok", data, at: new Date().toISOString() };
     } catch (e) {
