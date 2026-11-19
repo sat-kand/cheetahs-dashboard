@@ -1111,6 +1111,10 @@ function mondayOf(ymd) {
    Seniors all play the same numbered round, so it is the round that started most recently (today or earlier).
    Junior grades number their rounds separately, so it is each team's latest match in the most recent week of play,
    plus any earlier match still running into that week.
+   On Fridays, when nothing is actually in progress, this shows the coming round's fixtures instead of the one
+   just finished - a finished round isn't useful to look at by Friday. "In progress" is checked match by match
+   (not just by date) because a junior round can mix one- and two-day games across age groups: one grade's game
+   can still be running while another's, in the same week, is long since over.
    api adds getTeamMatchesFresh(teamId) and getScorecardFresh(matchId), which are not remembered between refreshes. */
 async function buildScores(api, now, kind) {
   const K = SCORE_KINDS[kind || "senior"];
@@ -1120,6 +1124,7 @@ async function buildScores(api, now, kind) {
      the right one. */
   const seasons = newestSeasons(await api.getSeasons(), now, 8);
   const today = ymdSydney(now);
+  const isFriday = new Date(today + "T12:00:00Z").getUTCDay() === 5;
   const all = [], byes = [];
   const ourTeams = new Set();
   let failedTeams = 0;
@@ -1158,28 +1163,43 @@ async function buildScores(api, now, kind) {
     delete t.club; delete t.display;
   }
   const started = all.filter(e => e.first <= today);
-  if (!started.length) return { round: null, rows: [], failedTeams };
-  let picked, name, season;
-  if (kind === "junior") {
-    const latest = started.map(e => e.first).sort().pop();
-    const week = mondayOf(latest);
+  const future = all.filter(e => e.first > today);
+  /* A two-day (or longer) game can still be running on a day its start date doesn't cover today's date range,
+     so "in progress" is read off each match's own status, not just worked out from the dates. */
+  const inProgressNow = all.some(e => e.first <= today && e.last >= today && (e.row.outcome === "progress" || e.row.outcome === "pending"));
+  const wantUpcoming = isFriday && !inProgressNow;
+
+  function juniorRound(pool, forward) {
+    if (!pool.length) return null;
+    const anchor = forward ? pool.map(e => e.first).sort()[0] : pool.map(e => e.first).sort().pop();
+    const week = mondayOf(anchor);
+    const inWeek = forward ? pool.filter(e => e.first <= addDays(week, 6)) : pool.filter(e => e.last >= week);
     const perTeam = new Map();
-    for (const e of started.filter(x => x.last >= week)) {
+    for (const e of inWeek) {
       const cur = perTeam.get(e.teamId);
-      if (!cur || e.first > cur.first) perTeam.set(e.teamId, e);
+      if (!cur || (forward ? e.first < cur.first : e.first > cur.first)) perTeam.set(e.teamId, e);
     }
-    picked = [...perTeam.values()];
+    const chosen = [...perTeam.values()];
+    if (!chosen.length) return null;
     const count = new Map();
-    picked.forEach(e => count.set(e.key, (count.get(e.key) || 0) + 1));
+    chosen.forEach(e => count.set(e.key, (count.get(e.key) || 0) + 1));
     const topKey = [...count].sort((a, b) => b[1] - a[1])[0][0];
-    const top = picked.find(e => e.key === topKey);
-    name = count.size > 1 ? "This week" : top.roundName; season = top.season;
-    picked = picked.concat(byes.filter(x => count.has(x.key) && !perTeam.has(x.teamId)));
-  } else {
-    const newest = started.slice().sort((a, b) => b.first.localeCompare(a.first) || b.last.localeCompare(a.last))[0];
-    picked = all.filter(e => e.key === newest.key).concat(byes.filter(x => x.key === newest.key));
-    name = newest.roundName; season = newest.season;
+    const top = chosen.find(e => e.key === topKey);
+    return { picked: chosen.concat(byes.filter(x => count.has(x.key) && !perTeam.has(x.teamId))),
+             name: count.size > 1 ? "This week" : top.roundName, season: top.season };
   }
+  function seniorRound(pool, forward) {
+    if (!pool.length) return null;
+    const chosen = pool.slice().sort((a, b) => forward
+      ? (a.first.localeCompare(b.first) || a.last.localeCompare(b.last))
+      : (b.first.localeCompare(a.first) || b.last.localeCompare(a.last)))[0];
+    return { picked: all.filter(e => e.key === chosen.key).concat(byes.filter(x => x.key === chosen.key)),
+             name: chosen.roundName, season: chosen.season };
+  }
+  const pickRound = kind === "junior" ? juniorRound : seniorRound;
+  const result = (wantUpcoming && pickRound(future, true)) || pickRound(started, false);
+  if (!result) return { round: null, rows: [], failedTeams };
+  const { picked, name, season } = result;
   const dated = picked.filter(e => e.first);
   const round = { name, season, first: dated.map(e => e.first).sort()[0], last: dated.map(e => e.last).sort().pop() };
   const rows = picked.map(e => e.row).sort((a, b) => a.rank - b.rank || a.grade.localeCompare(b.grade) || a.them.name.localeCompare(b.them.name));
@@ -2649,17 +2669,18 @@ document.querySelectorAll("#seg-records button").forEach(b => b.addEventListener
   if (recViews[recView].state === "idle") loadRecords();
 }));
 
-/* ---- tabs: every tab except Milestones is refreshed each time it is opened ---- */
+/* ---- tabs: each tab loads once per page load (switching tabs back and forth never re-fetches); press
+   its own Refresh button to pull fresh data ---- */
 let milestonesLoaded = false;
 function showTab(name, updateHash) {
   for (const t of document.querySelectorAll(".tab")) t.setAttribute("aria-selected", String(t.dataset.tab === name));
   for (const n of ["milestones", "xii", "hl", "audit", "scores", "jscores", "records"]) $("panel-" + n).hidden = name !== n;
   if (updateHash) history.replaceState(null, "", name === "xii" ? "#club-xii" : name === "hl" ? "#highlights" : name === "audit" ? "#audit" : name === "scores" ? "#scores" : name === "jscores" ? "#junior-scores" : name === "milestones" ? "#milestones" : name === "records" ? "#records" : location.pathname + location.search);
-  if (name === "xii") loadXII();
-  else if (name === "hl") loadHL();
-  else if (name === "audit") loadAudit();
-  else if (name === "scores") seniorScores.load();
-  else if (name === "jscores") juniorScores.load();
+  if (name === "xii") { if (xii.state === "idle") loadXII(); }
+  else if (name === "hl") { if (hl.state === "idle") loadHL(); }
+  else if (name === "audit") { if (audit.state === "idle") loadAudit(); }
+  else if (name === "scores") { if (seniorScores.get().state === "idle") seniorScores.load(); }
+  else if (name === "jscores") { if (juniorScores.get().state === "idle") juniorScores.load(); }
   else if (name === "records") { if (recViews[recView].state === "idle") loadRecords(); }
   else if (name === "milestones" && !milestonesLoaded) { milestonesLoaded = true; refresh(); }
 }
