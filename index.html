@@ -859,7 +859,11 @@ async function buildJuniorHighlights(api, now) {
   if (!started.length) return { round: null, failedTeams };
   const week = mondayOf(started.map(e => e.first).sort().pop());
   const perTeam = new Map();
-  for (const e of started.filter(x => x.last >= week)) {
+  /* Some age groups play fortnightly (or had a gap week), so a team's latest match can sit in the week before the newest
+     week of junior cricket. Including that previous week keeps those teams (e.g. U14) in the highlights; a team that
+     played in both weeks still uses its newest match, via the per-team pick below. */
+  const windowStart = addDays(week, -7);
+  for (const e of started.filter(x => x.last >= windowStart)) {
     const cur = perTeam.get(e.teamId);
     if (!cur || e.first > cur.first) perTeam.set(e.teamId, e);
   }
@@ -1139,13 +1143,14 @@ async function buildScores(api, now, kind) {
   const isFriday = new Date(today + "T12:00:00Z").getUTCDay() === 5;
   const all = [], byes = [];
   const ourTeams = new Set();
+  const teamInfo = new Map(); /* teamId -> { grade, rank, seasonId }, for inferring byes below */
   /* Counted per distinct team, not per attempt - a team can appear under more than one of the
      newest season records, so counting every failed attempt could report more teams failed than
      the club actually has. */
   const failedIds = new Set();
   for (const s of seasons) {
     const teams = (await api.getTeams(s.id)).filter(K.filter);
-    teams.forEach(t => ourTeams.add(t.id));
+    teams.forEach(t => { ourTeams.add(t.id); teamInfo.set(t.id, { grade: K.label(t), rank: K.rank(K.label(t)), seasonId: s.id }); });
     await mapLimit(teams, 6, async t => {
       let list;
       try { list = await api.getTeamMatchesFresh(t.id); } catch (e) { failedIds.add(t.id); return; }
@@ -1231,7 +1236,21 @@ async function buildScores(api, now, kind) {
     const roundMatches = all.filter(e => e.key === chosen.key);
     const roundTeamIds = new Set(roundMatches.map(e => e.teamId));
     const week = mondayOf(chosen.first), weekEnd = addDays(week, 6);
-    return { picked: roundMatches.concat(matchingByes([chosen.key], week, weekEnd, roundTeamIds)),
+    const realByes = matchingByes([chosen.key], week, weekEnd, roundTeamIds);
+    /* PlayHQ does not list a bye in a team's fixtures at all - the team just has no entry for that round (confirmed live:
+       B04 and B12 go from Round 4 straight to Round 6). So a team of this season with fixtures before or after the round
+       but none in it is on a bye. */
+    const seasonId = chosen.key.split("|")[0];
+    const have = new Set([...roundTeamIds, ...realByes.map(x => x.teamId)]);
+    const inferred = [];
+    for (const [tid, info] of teamInfo) {
+      if (info.seasonId !== seasonId || have.has(tid)) continue;
+      const mine = all.filter(e => e.teamId === tid && e.key.split("|")[0] === seasonId);
+      if (!mine.some(e => e.first > chosen.last || e.last < chosen.first)) continue;
+      inferred.push({ teamId: tid, key: chosen.key, first: "", last: "",
+        row: { id: "bye" + tid, grade: info.grade, rank: info.rank, outcome: "bye", us: [], them: { name: "", innings: [] } } });
+    }
+    return { picked: roundMatches.concat(realByes, inferred),
              name: chosen.roundName, season: chosen.season };
   }
   const pickRound = kind === "junior" ? juniorRound : seniorRound;
