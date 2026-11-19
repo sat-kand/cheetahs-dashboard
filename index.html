@@ -676,9 +676,12 @@ function selectXII(players) {
    A round counts once its matches' scheduled dates have arrived, even if a team's scorecard
    (in any grade) is still live, pending or at stumps; round.matches carries each match's status
    so callers can flag or skip whichever teams aren't finished yet.
-   api adds getTeamMatches(teamId) -> the team's fixtures with round, status and schedule. */
-async function findLastRound(api, now) {
-  const seasons = newestSeasons(await api.getSeasons(), now, 2);
+   api adds getTeamMatches(teamId) -> the team's fixtures with round, status and schedule.
+   seasonCount defaults to 2 (Play Cricket's one season per half-year, overlapping at the boundary);
+   PlayHQ instead gives several concurrent season records per half-year, one per competition
+   (Senior, the Sunday T20 side, each junior division), so a PlayHQ-backed caller passes more. */
+async function findLastRound(api, now, seasonCount) {
+  const seasons = newestSeasons(await api.getSeasons(), now, seasonCount || 2);
   const teamIds = await teamIdsFor(api, seasons);
   const today = ymdSydney(now);
   const rounds = new Map();
@@ -989,7 +992,7 @@ function statusLabel(s) {
    still live, pending or at stumps gets a "status" issue added on top of the usual checks, since
    the scorecard can still change before the match is finalised. api adds getScorecard(matchId). */
 async function buildAudit(api, now, opts) {
-  const { round, failedTeams, teamIds } = await findLastRound(api, now);
+  const { round, failedTeams, teamIds } = await findLastRound(api, now, (opts && opts.seasonCount) || 2);
   if (!round) return { round: null, failedTeams };
   const teams = [];
   await mapLimit([...round.matches.keys()], 4, async id => {
@@ -1100,7 +1103,10 @@ function mondayOf(ymd) {
    api adds getTeamMatchesFresh(teamId) and getScorecardFresh(matchId), which are not remembered between refreshes. */
 async function buildScores(api, now, kind) {
   const K = SCORE_KINDS[kind || "senior"];
-  const seasons = newestSeasons(await api.getSeasons(), now, 2);
+  /* PlayHQ gives several concurrent season records per half-year, one per competition (see
+     findLastRound) - Senior Scores (PlayHQ-backed) needs more of them than Junior (still Play
+     Cricket, one season per half-year) to be sure of including the right one. */
+  const seasons = newestSeasons(await api.getSeasons(), now, kind === "senior" ? 8 : 2);
   const today = ymdSydney(now);
   const all = [], byes = [];
   const ourTeams = new Set();
@@ -2320,7 +2326,7 @@ async function loadAudit() {
   btn.disabled = true; btn.textContent = "Refreshing…";
   audit.state = "loading"; renderAudit();
   try {
-    const data = await buildAudit(makePhqApi(), new Date(), { checkKeeper: false });
+    const data = await buildAudit(makePhqApi(), new Date(), { checkKeeper: false, seasonCount: 8 });
     if (run !== auditRun) return;
     audit = { state: "ok", data, at: new Date().toISOString() };
   } catch (e) {
