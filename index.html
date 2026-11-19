@@ -279,7 +279,6 @@ td.num { font-weight: 700; color: var(--heading); }
   <div class="main">
   <section class="block" aria-labelledby="h-matches">
     <h2 id="h-matches">Matches</h2>
-    <p class="blurb">Players who played their 100th match for the club, or every 50th after that, during the period.</p>
     <div class="summary" id="m-summary">Checking matches…</div>
     <div class="seg" id="seg-matches" role="group" aria-label="Period for matches milestones">
       <button type="button" data-days="7" aria-pressed="true">Last 7 days</button>
@@ -291,7 +290,6 @@ td.num { font-weight: 700; color: var(--heading); }
 
   <section class="block" aria-labelledby="h-wickets">
     <h2 id="h-wickets">Wickets</h2>
-    <p class="blurb">Players whose career wickets went from below a milestone to 100 or more, or every 50 after that, during the period.</p>
     <div class="summary" id="w-summary">Checking wickets…</div>
     <div class="seg" id="seg-wickets" role="group" aria-label="Period for wickets milestones">
       <button type="button" data-days="7" aria-pressed="true">Last 7 days</button>
@@ -302,7 +300,6 @@ td.num { font-weight: 700; color: var(--heading); }
   </section>
   <section class="block" aria-labelledby="h-runs">
     <h2 id="h-runs">Runs</h2>
-    <p class="blurb">Players whose career runs went from below a milestone to 1,000 or more, or every 500 after that, during the period.</p>
     <div class="summary" id="r-summary">Checking runs…</div>
     <div class="seg" id="seg-runs" role="group" aria-label="Period for runs milestones">
       <button type="button" data-days="7" aria-pressed="true">Last 7 days</button>
@@ -315,7 +312,6 @@ td.num { font-weight: 700; color: var(--heading); }
 
   <aside class="side" aria-labelledby="h-watch">
     <h2 id="h-watch">Watchlist</h2>
-    <p class="blurb">Only players who have played for the club in the last 8 months.</p>
     <p class="bad" id="watch-note"></p>
     <div class="watch">
       <h3>Matches</h3>
@@ -343,7 +339,6 @@ td.num { font-weight: 700; color: var(--heading); }
     </div>
     <section class="block" aria-labelledby="h-xii">
       <h2 id="h-xii">Senior Club XII of the round</h2>
-      <p class="blurb">The best senior performers of the club's most recently played round: the top six run scorers, the wicketkeeper with the most dismissals and the top five wicket takers.</p>
       <div class="summary" id="x-summary">Loading the most recently played round…</div>
       <div class="grid xii-grid" id="x-grid"></div>
     </section>
@@ -359,19 +354,16 @@ td.num { font-weight: 700; color: var(--heading); }
     <div data-hl-view="senior">
     <section class="block" aria-labelledby="h-hl">
       <h2 id="h-hl">Senior 50 to 99 scores of the round</h2>
-      <p class="blurb">Every senior player who scored 50 to 99 in a single innings in the club's most recently played round, highest grade first, then highest score. A two-day match can give a player two innings, and each score in range is listed. Centuries have their own tile below.</p>
       <div class="summary" id="h-summary">Loading the most recently played round…</div>
       <div class="grid xii-grid" id="h-grid"></div>
     </section>
     <section class="block" aria-labelledby="h-hl100">
       <h2 id="h-hl100">Senior centuries of the round</h2>
-      <p class="blurb">Every senior player who scored 100 or more in a single innings in the same round, highest grade first, then highest score.</p>
       <div class="summary" id="h100-summary">Loading the most recently played round…</div>
       <div class="grid xii-grid" id="h100-grid"></div>
     </section>
     <section class="block" aria-labelledby="h-hlw">
       <h2 id="h-hlw">Senior 4+ wickets of the round</h2>
-      <p class="blurb">Every senior bowler who took 4 or more wickets in a single innings in the same round as the senior scores above, best bowling figures first (most wickets, then fewest runs conceded).</p>
       <div class="summary" id="hw-summary">Loading the most recently played round…</div>
       <div class="grid xii-grid" id="hw-grid"></div>
     </section>
@@ -379,13 +371,11 @@ td.num { font-weight: 700; color: var(--heading); }
     <div data-hl-view="junior" hidden>
     <section class="block" aria-labelledby="h-hlj">
       <h2 id="h-hlj">Junior 25+ scores of the round</h2>
-      <p class="blurb">Every junior player who scored 25 or more in a single innings in their team's latest match. Junior grades number their rounds separately, so each team's own last match is used, from the most recent week of junior cricket. Oldest age group first, then highest score.</p>
       <div class="summary" id="hj-summary">Loading each junior team's latest match…</div>
       <div class="grid xii-grid" id="hj-grid"></div>
     </section>
     <section class="block" aria-labelledby="h-hlwj">
       <h2 id="h-hlwj">Junior 3+ wickets of the round</h2>
-      <p class="blurb">Every junior bowler who took 3 or more wickets in a single innings in their team's latest match, the same matches as the junior scores above. Best bowling figures first (most wickets, then fewest runs conceded).</p>
       <div class="summary" id="hwj-summary">Loading each junior team's latest match…</div>
       <div class="grid xii-grid" id="hwj-grid"></div>
     </section>
@@ -440,7 +430,6 @@ td.num { font-weight: 700; color: var(--heading); }
     </div>
     <section class="block" aria-labelledby="h-audit">
       <h2 id="h-audit">Senior scorecard audit</h2>
-      <p class="blurb">Checks each senior team's scorecard for the club's most recently played round: that it's finalised, batting and bowling totals add up, every catch, stumping and run out is credited to a fielder, and no player's name is hidden.</p>
       <div class="summary" id="a-summary">Loading the most recently played round…</div>
       <div class="grid xii-grid" id="a-grid"></div>
     </section>
@@ -1789,6 +1778,18 @@ function phqLocalToISO(date, time) {
   if (diff > 12) diff -= 24; else if (diff < -12) diff += 24;
   return new Date(guess.getTime() + diff * 3600000).toISOString();
 }
+/* Whether a PlayHQ fixture entry is a bye. Fewer than two competitors is the confirmed shape, but
+   some rounds instead give a bye a full two-competitor game against a placeholder "opponent", or
+   flag it only through the game's own type/status text - any of those would otherwise come through
+   as a normal (and wrongly-labelled "upcoming"/"in progress") fixture, so all of these are checked. */
+function phqIsByeGame(g) {
+  const comps = g.competitors || [];
+  if (comps.length < 2) return true;
+  if (/\bbye\b/i.test(String(g.type || g.matchType || ""))) return true;
+  if (/\bbye\b/i.test(String(g.status || ""))) return true;
+  if (comps.some(c => /^\s*bye\s*$/i.test(String(c.name || c.teamName || "")))) return true;
+  return false;
+}
 /* One PlayHQ Team Fixture Collection entry -> the match shape findLastRound/buildScores expect
    from Play Cricket's getTeamMatches. PlayHQ gives the final score total per side here, but not
    wickets-fallen or overs - those only come from the per-game Summary, via getScorecard(Fresh). */
@@ -1796,7 +1797,7 @@ function phqFixtureToLegacy(g) {
   const comps = g.competitors || [];
   return {
     id: g.id,
-    matchType: comps.length < 2 ? "BYE" : undefined,
+    matchType: phqIsByeGame(g) ? "BYE" : undefined,
     round: { name: g.round && g.round.name },
     status: phqStatus(g.status),
     matchSchedule: (g.schedule && g.schedule.date) ? [{ startDateTime: phqLocalToISO(g.schedule.date, g.schedule.time) }] : [],
