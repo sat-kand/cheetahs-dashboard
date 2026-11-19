@@ -2035,7 +2035,8 @@ function phqAdaptScorecard(d) {
   const fullName = id => { const a = byId.get(id); return a ? (a.firstName + " " + a.lastName).trim() : ""; };
   const teams = (d.teams || []).map(t => ({
     id: t.id, displayName: t.name, name: t.name,
-    players: (d.appearances || []).filter(a => a.teamId === t.id).map(a => ({ participantId: a.id, name: fullName(a.id), roles: [] }))
+    /* coaches and managers are listed with the team too; only players count */
+    players: (d.appearances || []).filter(a => a.teamId === t.id && (!a.roleType || /player/i.test(a.roleType))).map(a => ({ participantId: a.id, name: fullName(a.id), roles: [] }))
   }));
   const stat = (arr, type) => { const e = (arr || []).find(x => x.type === type); return e ? e.value : 0; };
   /* sharedStatistics linkage (who bowled/fielded a dismissal) is inconsistently populated - some
