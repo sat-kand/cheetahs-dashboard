@@ -432,6 +432,10 @@ td.num { font-weight: 700; color: var(--heading); }
     <div class="toolbar">
       <div class="actions"><button type="button" class="refresh" id="a-refresh">Refresh</button><button type="button" class="copy" id="a-copy">Copy issues</button></div>
     </div>
+    <div class="seg" id="seg-audit" role="group" aria-label="Senior or junior audit">
+      <button type="button" data-view="senior" aria-pressed="true">Senior</button>
+      <button type="button" data-view="junior" aria-pressed="false">Junior</button>
+    </div>
     <section class="block" aria-labelledby="h-audit">
       <h2 id="h-audit">Senior scorecard audit</h2>
       <div class="summary" id="a-summary">Loading the most recently played round…</div>
@@ -835,7 +839,9 @@ function juniorHighRank(label) {
 }
 /* Junior innings of HL_JUNIOR_MIN_RUNS or more. Junior grades number rounds separately, so for each junior team this
    takes its latest match from the most recent week of junior cricket (the same matches as the Junior Scores tab). */
-async function buildJuniorHighlights(api, now) {
+/* Each junior team's latest match: the most recent week of junior cricket, plus the week before for age groups that
+   play fortnightly. Shared by Junior Highlights and the junior scorecard audit. */
+async function latestJuniorMatches(api, now) {
   await loadJuniorCoaches();
   /* PlayHQ-backed: several concurrent season records per half-year, so more of the newest seasons
      need checking than a single-season-per-half-year source would need. */
@@ -855,13 +861,13 @@ async function buildJuniorHighlights(api, now) {
         if (m.matchType === "BYE" || !m.round) continue;
         const days = (m.matchSchedule || []).map(x => parseDate(x.startDateTime)).filter(d => !isNaN(d)).map(ymdSydney).sort();
         if (!days.length || days[0] > today) continue;
-        started.push({ teamId: t.id, label: juniorLabel(t), seasonId: s.id, season: s.name, matchId: m.id, status: m.status,
+        started.push({ teamId: t.id, label: juniorLabel(t), gradeName: (t.grade && t.grade.name) || "", seasonId: s.id, season: s.name, matchId: m.id, status: m.status,
           roundName: m.round.name, first: days[0], last: days[days.length - 1] });
       }
     });
   }
   const failedTeams = failedIds.size;
-  if (!started.length) return { round: null, failedTeams };
+  if (!started.length) return { picked: [], failedTeams };
   const week = mondayOf(started.map(e => e.first).sort().pop());
   const perTeam = new Map();
   /* Some age groups play fortnightly (or had a gap week), so a team's latest match can sit in the week before the newest
@@ -872,7 +878,11 @@ async function buildJuniorHighlights(api, now) {
     const cur = perTeam.get(e.teamId);
     if (!cur || e.first > cur.first) perTeam.set(e.teamId, e);
   }
-  const picked = [...perTeam.values()];
+  return { picked: [...perTeam.values()], failedTeams };
+}
+async function buildJuniorHighlights(api, now) {
+  const { picked, failedTeams } = await latestJuniorMatches(api, now);
+  if (!picked.length) return { round: null, failedTeams };
   /* squads from each match's team sheet, one entry per player per match */
   const entries = [];
   await mapLimit(picked, 6, async e => {
@@ -905,6 +915,140 @@ async function buildJuniorHighlights(api, now) {
 }
 
 /* ---- Scorecard audit ---- */
+/* Which set of junior rules a grade follows, from its PlayHQ grade name ("U14 Division 1", "U12 Girls Stage 1", "U10 Red South"). */
+function juniorAuditCategory(gradeName) {
+  const m = String(gradeName).match(/\bU\s?(\d{1,2})\b/i);
+  const age = m ? Number(m[1]) : 0;
+  if (!age) return { kind: "big", age }; /* unknown age: hold it to the full rules */
+  if (/girl/i.test(gradeName) && age <= 12) return { kind: "small", age };
+  if (age <= 11) return { kind: "small", age };
+  if (age <= 13) return { kind: "mid", age };
+  return { kind: "big", age };
+}
+/* PlayHQ overs as "3.4" (3 overs, 4 balls) -> balls */
+function overBalls(o) { const v = Number(o) || 0; return Math.floor(v) * 6 + Math.round((v - Math.floor(v)) * 10); }
+function oversText(o) { return ballsToOvers(overBalls(o)); }
+/* The junior rules on top of the shared checks. cat from juniorAuditCategory; keepers = how many of our players the
+   team sheet marks as wicketkeeper (null when that could not be read). */
+function auditJuniorRules(sc, teamId, cat, keepers) {
+  const issues = [];
+  const add = (type, text) => issues.push({ type, text });
+  const us = (sc.teams || []).find(t => t.id === teamId) || { players: [] };
+  const list = us.players || [];
+  const name = id => { const p = list.find(x => x.participantId === id); return p ? tidyName(p.name) : "A player"; };
+  const batters = inn => (inn.batting || []).filter(b => b.didBat);
+  const bowlers = inn => (inn.bowling || []).filter(b => overBalls(b.oversBowled) > 0);
+  const played = inn => batters(inn).length > 0 || bowlers(inn).length > 0 || Number(inn.runsScored) > 0;
+  const ourBat = (sc.innings || []).filter(i => i.battingTeamId === teamId && played(i));
+  const ourBowl = (sc.innings || []).filter(i => i.battingTeamId !== teamId && played(i));
+  const multi = ourBat.length > 1 || ourBowl.length > 1;
+  const tagged = (i, n) => multi ? ordinal(i + 1) + " innings: " + n : n;
+  const twoDay = /twoday/i.test(sc.gameType);
+  const first = inn => (sc.innings || []).indexOf(inn) === 0;
+  /* "full distance": the innings used all its overs, so everyone should have had their turn */
+  const limitOf = inn => Number(inn.overLimit) || (/t20/i.test(sc.gameType) ? 20 : 0);
+  const fullDistance = inn => { const l = limitOf(inn); return l > 0 && overBalls(inn.oversBowled) >= l * 6; };
+
+  if (cat.kind === "big") {
+    ourBat.forEach((inn, i) => { const n = batters(inn).length; if (n > 11) add("lineup", tagged(i, n + " players batted; no more than 11 may bat in an innings.")); });
+    ourBowl.forEach((inn, i) => {
+      const bw = bowlers(inn);
+      if (bw.length > 11) add("lineup", tagged(i, bw.length + " players bowled; no more than 11 may bowl in an innings."));
+      let max = 6, why = "a one-day game";
+      if (twoDay) {
+        if (cat.age >= 17) { max = 12; why = "a U17 two-day innings"; }
+        else if (cat.age <= 15) { max = 10; why = "a U" + cat.age + " two-day innings"; }
+        else max = 0; /* no two-day limit given for this age */
+      }
+      if (max) for (const b of bw) if (overBalls(b.oversBowled) > max * 6)
+        add("overs", tagged(i, name(b.participantId) + " bowled " + oversText(b.oversBowled) + " overs; the limit is " + max + " per bowler in " + why + "."));
+    });
+  }
+  if (cat.kind === "mid") {
+    ourBat.forEach((inn, i) => { const n = batters(inn).length; if (n > 9) add("lineup", tagged(i, n + " players batted; no more than 9 may bat.")); });
+    ourBowl.forEach((inn, i) => { const n = bowlers(inn).length; if (n > 11) add("lineup", tagged(i, n + " players bowled; no more than 11 may bowl.")); });
+    const bat = ourBat[0], bowl = ourBowl[0];
+    const battedIds = new Set(bat ? batters(bat).map(b => b.participantId) : []);
+    const bowledIds = new Set(bowl ? bowlers(bowl).map(b => b.participantId) : []);
+    const batCard = new Map(bat ? (bat.batting || []).map(b => [b.participantId, b]) : []);
+    /* PlayHQ gives the order bowlers came on but not the over each started in, so the start over is only known within
+       bounds: no earlier than their place in the order, no later than one after all the overs bowled by those before them. */
+    const order = bowl ? bowlers(bowl).sort((a, b) => a.order - b.order) : [];
+    const startBounds = new Map();
+    let before = 0;
+    order.forEach((b, k) => { startBounds.set(b.participantId, { earliest: k + 1, latest: Math.ceil(before / 6) + 1, place: k + 1 }); before += overBalls(b.oversBowled); });
+    for (const p of list) {
+      const id = p.participantId;
+      if (bat && bowl && !battedIds.has(id)) {
+        const sb = startBounds.get(id);
+        if (!sb) add("lineup", name(id) + " did not bat or bowl; a player who doesn't bat must bowl, starting within the first 15 overs.");
+        else if (sb.earliest > 15) add("lineup", name(id) + " did not bat and started bowling after over 15 (bowler No. " + sb.place + ").");
+        else if (sb.latest > 15) add("check", name(id) + " did not bat, so must start bowling within the first 15 overs. They were bowler No. " + sb.place + " and could have started as late as over " + sb.latest + "; the scorecard doesn't show the over, so check the ball-by-ball.");
+      }
+      if (bat && bowl && !bowledIds.has(id) && battedIds.has(id)) {
+        const b = batCard.get(id);
+        if (b && b.order > 5) add("lineup", name(id) + " did not bowl but batted at No. " + b.order + "; a player who doesn't bowl must bat in the top 5.");
+      }
+    }
+  }
+  if (cat.kind === "small") {
+    if (keepers != null && keepers < 2) add("keeper", (keepers ? "Only 1 wicketkeeper is" : "No wicketkeeper is") + " named in the team list; at least 2 must be.");
+    ourBat.forEach((inn, i) => {
+      const done = new Set(batters(inn).map(b => b.participantId));
+      const missing = list.filter(p => !done.has(p.participantId));
+      if (missing.length && (first(inn) || fullDistance(inn))) add("lineup", tagged(i, "Did not bat: " + missing.map(p => tidyName(p.name)).join(", ") + ". Everyone in the team list must bat."));
+    });
+    ourBowl.forEach((inn, i) => {
+      const bw = bowlers(inn);
+      if (!bw.length) { add("bowling", tagged(i, "No bowling figures are entered for our side, so the bowling rules can't be checked.")); return; }
+      const full = first(inn) || fullDistance(inn);
+      const done = new Set(bw.map(b => b.participantId));
+      const missing = list.filter(p => !done.has(p.participantId));
+      if (missing.length && full) add("lineup", tagged(i, "Did not bowl: " + missing.map(p => tidyName(p.name)).join(", ") + ". Everyone in the team list must bowl."));
+      /* Overs shared out evenly: L overs between N players is L/N each; when that doesn't divide, some bowl one more. */
+      const L = limitOf(inn) || Math.ceil(overBalls(inn.oversBowled) / 6), N = list.length;
+      if (L && N) {
+        const lo = Math.floor(L / N), hi = Math.ceil(L / N);
+        const share = lo === hi ? lo + " each" : lo + " or " + hi + " each";
+        for (const b of bw) {
+          const balls = overBalls(b.oversBowled);
+          if (balls > hi * 6) add("overs", tagged(i, name(b.participantId) + " bowled " + oversText(b.oversBowled) + " overs; " + L + " overs shared by " + N + " players is " + share + "."));
+          else if (fullDistance(inn) && balls < lo * 6) add("overs", tagged(i, name(b.participantId) + " bowled only " + oversText(b.oversBowled) + " overs; " + L + " overs shared by " + N + " players is " + share + "."));
+        }
+      }
+    });
+  }
+  return issues;
+}
+async function buildJuniorAudit(api, now) {
+  const { picked, failedTeams } = await latestJuniorMatches(api, now);
+  if (!picked.length) return { round: null, failedTeams };
+  const teams = [];
+  await mapLimit(picked, 4, async e => {
+    const cat = juniorAuditCategory(e.gradeName);
+    const notFinal = NOT_FINISHED.has(String(e.status || "").toUpperCase());
+    const statusIssue = notFinal ? [{ type: "status", text: "Still shown as \"" + statusLabel(e.status) + "\", not finalised — these figures can still change." }] : [];
+    const base = { matchId: e.matchId, grade: e.label, name: e.label, opponent: "", rank: juniorRank(e.label) };
+    let sc = null;
+    try { sc = await api.getScorecard(e.matchId); } catch (x) { sc = null; }
+    if (!sc || !Array.isArray(sc.innings)) { teams.push({ ...base, loaded: notFinal, issues: statusIssue }); return; }
+    const them = (sc.teams || []).find(x => x.id !== e.teamId);
+    let keepers = null;
+    if (cat.kind === "small") {
+      try {
+        const j = await phqJSON("/v1/games/" + e.matchId + "/summary");
+        keepers = (((j && (j.data || j)) || {}).appearances || []).filter(a => (a.teamID || a.teamId) === e.teamId && a.playerPosition === "WICKET_KEEPER").length;
+      } catch (x) { keepers = null; }
+    }
+    /* U14 and up get every senior check; the younger grades share only the hidden-name check */
+    const shared = auditTeam(sc, e.teamId, { checkKeeper: false }).filter(it => cat.kind === "big" || it.type === "names");
+    teams.push({ ...base, opponent: them ? them.displayName || them.name : "", loaded: true, issues: [...statusIssue, ...shared, ...auditJuniorRules(sc, e.teamId, cat, keepers)] });
+  });
+  teams.sort((a, b) => a.rank - b.rank || String(a.grade).localeCompare(String(b.grade)));
+  const dates = picked.map(e => e.first).concat(picked.map(e => e.last)).sort();
+  return { round: { name: "Latest junior matches", season: picked[0].season, first: dates[0], last: dates[dates.length - 1] }, teams, failedTeams };
+}
+
 /* Play Cricket answers with either "Innings" or "innings" style keys, so make every key start lower case. */
 function lowerKeys(o) {
   if (Array.isArray(o)) return o.map(lowerKeys);
@@ -1926,11 +2070,12 @@ function phqAdaptScorecard(d) {
         else if (dismissedBy(shared, a.id, "LEG_BEFORE_WICKET")) dismissalType = "lbw";
         else dismissalType = "out";
       }
-      return { playerShortName: fullName(a.id), participantId: a.id, runsScored: stat(a.statistics, "TOTAL_RUNS"), ballsFaced: stat(a.statistics, "BALLS_FACED"), dismissalType };
+      return { playerShortName: fullName(a.id), participantId: a.id, runsScored: stat(a.statistics, "TOTAL_RUNS"), ballsFaced: stat(a.statistics, "BALLS_FACED"), dismissalType,
+        order: Number(a.displayOrder) || 0, didBat: !!a.status && a.status !== "DID_NOT_BAT" };
     });
     const bowling = (bowlingTeam ? bowlingTeam.appearances || [] : [])
       .filter(a => stat(a.statistics, "OVERS") > 0 || stat(a.statistics, "WICKETS") > 0 || stat(a.statistics, "RUNS") > 0)
-      .map(a => ({ playerShortName: fullName(a.id), participantId: a.id, wicketsTaken: stat(a.statistics, "WICKETS"), runsConceded: stat(a.statistics, "RUNS"), oversBowled: stat(a.statistics, "OVERS") }));
+      .map(a => ({ playerShortName: fullName(a.id), participantId: a.id, wicketsTaken: stat(a.statistics, "WICKETS"), runsConceded: stat(a.statistics, "RUNS"), oversBowled: stat(a.statistics, "OVERS"), order: Number(a.displayOrder) || 0 }));
     const fielding = (bowlingTeam ? bowlingTeam.appearances || [] : []).map(a => ({
       playerShortName: fullName(a.id), participantId: a.id,
       totalCatches: stat(a.statistics, "TOTAL_CATCHES"),
@@ -1946,10 +2091,11 @@ function phqAdaptScorecard(d) {
       isDeclared: closeStatus === "declared", inningsCloseType: closeStatus,
       byesRuns: stat(battingTeam.statistics, "EXTRA_BYES"), legByesRuns: stat(battingTeam.statistics, "EXTRA_LEG_BYES"),
       wideBalls: stat(battingTeam.statistics, "EXTRA_WIDES"), noBalls: stat(battingTeam.statistics, "EXTRA_NO_BALLS"),
-      penalties: stat(battingTeam.statistics, "EXTRA_PENALTY_RUNS"), batting, bowling, fielding
+      penalties: stat(battingTeam.statistics, "EXTRA_PENALTY_RUNS"), overLimit: stat(battingTeam.statistics, "OVER_LIMIT"),
+      oversBowled: stat(battingTeam.statistics, "TOTAL_OVERS"), bowlingTeamId: bowlingTeam ? bowlingTeam.id : "", batting, bowling, fielding
     });
   }
-  return { teams, innings };
+  return { teams, innings, gameType: String(d.type || "") };
 }
 function makePhqApi() {
   const memo = new Map();
@@ -2496,14 +2642,19 @@ document.querySelectorAll("#seg-hl button").forEach(b => b.addEventListener("cli
 }));
 
 /* ---- Scorecard audit tab ---- */
-let audit = { state: "idle", data: null, at: null };
-const ISSUE_ORDER = ["status", "keeper", "batting", "bowling", "fielding", "names"];
-const ISSUE_LABEL = { status: "Not final", keeper: "Keeper", batting: "Batting", bowling: "Bowling", fielding: "Fielding", names: "Names" };
+const auditViews = { senior: { state: "idle", data: null, at: null }, junior: { state: "idle", data: null, at: null } };
+let auditView = "senior";
+let audit = auditViews.senior; /* the view on screen */
+const ISSUE_ORDER = ["status", "keeper", "lineup", "overs", "batting", "bowling", "fielding", "names", "check"];
+const ISSUE_LABEL = { status: "Not final", keeper: "Keeper", lineup: "Team list", overs: "Overs", batting: "Batting", bowling: "Bowling", fielding: "Fielding", names: "Names", check: "Check" };
 function sortedIssues(t) { return [...t.issues].sort((a, b) => ISSUE_ORDER.indexOf(a.type) - ISSUE_ORDER.indexOf(b.type)); }
 function renderAudit() {
+  audit = auditViews[auditView];
+  const word = auditView === "junior" ? "junior" : "senior";
+  $("h-audit").textContent = (auditView === "junior" ? "Junior" : "Senior") + " scorecard audit";
   const sum = $("a-summary"), grid = $("a-grid");
   grid.innerHTML = "";
-  if (audit.state === "loading" && !audit.data) { sum.textContent = "Loading the most recently played round…"; return; }
+  if (audit.state !== "ok" && audit.state !== "error" && !audit.data) { sum.textContent = auditView === "junior" ? "Loading each junior team's latest match…" : "Loading the most recently played round…"; return; }
   if (audit.state === "error" && !audit.data) {
     sum.innerHTML = '<span class="bad" style="margin:0">Could not load the round. Press Refresh to try again.</span>';
     return;
@@ -2512,7 +2663,7 @@ function renderAudit() {
   if (!d.round) {
     sum.innerHTML = d.failedTeams
       ? '<span class="bad" style="margin:0">Could not read the fixtures for ' + plural(d.failedTeams, "team", "teams") + ", so the most recently played round cannot be worked out. Press Refresh to try again.</span>"
-      : "<strong>No senior round has been played yet.</strong>";
+      : "<strong>No " + word + " round has been played yet.</strong>";
     return;
   }
   const bad = d.teams.filter(t => t.issues.length), total = d.teams.reduce((a, t) => a + t.issues.length, 0), unread = d.teams.filter(t => !t.loaded);
@@ -2544,7 +2695,7 @@ function renderAudit() {
       for (const it of sortedIssues(t)) {
         const li = document.createElement("li"); li.className = "issue";
         const span = document.createElement("span");
-        const tag = document.createElement("span"); tag.className = "tag" + (it.type === "status" ? " status" : ""); tag.textContent = ISSUE_LABEL[it.type];
+        const tag = document.createElement("span"); tag.className = "tag" + (it.type === "status" || it.type === "check" ? " status" : ""); tag.textContent = ISSUE_LABEL[it.type];
         span.append(tag, document.createTextNode(it.text));
         li.appendChild(span);
         ul.appendChild(li);
@@ -2556,8 +2707,9 @@ function renderAudit() {
 }
 function auditText() {
   const d = audit.data;
-  if (!d || !d.round) return "Parramatta Cheetahs senior scorecard audit: no round played yet.";
-  const out = ["Parramatta Cheetahs senior scorecard audit - " + d.round.name + " (" + xiiRounds(d.round) + ")"];
+  const word = auditView === "junior" ? "junior" : "senior";
+  if (!d || !d.round) return "Parramatta Cheetahs " + word + " scorecard audit: no round played yet.";
+  const out = ["Parramatta Cheetahs " + word + " scorecard audit - " + d.round.name + " (" + xiiRounds(d.round) + ")"];
   for (const t of d.teams) {
     if (t.loaded && !t.issues.length) continue;
     out.push("", shortGrade(t.grade) + " - " + t.name + (t.opponent ? " v " + t.opponent : ""));
@@ -2569,21 +2721,28 @@ function auditText() {
 }
 let auditRun = 0;
 async function loadAudit() {
+  const which = auditView;
   const run = ++auditRun;
   const btn = $("a-refresh");
   btn.disabled = true; btn.textContent = "Refreshing…";
-  audit.state = "loading"; renderAudit();
+  auditViews[which].state = "loading"; renderAudit();
   try {
-    const data = await buildAudit(makePhqApi(), new Date(), { checkKeeper: false, seasonCount: 8 });
-    if (run !== auditRun) return;
-    audit = { state: "ok", data, at: new Date().toISOString() };
+    const data = which === "junior" ? await buildJuniorAudit(makePhqApi(), new Date())
+                                    : await buildAudit(makePhqApi(), new Date(), { checkKeeper: false, seasonCount: 8 });
+    auditViews[which] = { state: "ok", data, at: new Date().toISOString() };
   } catch (e) {
-    if (run !== auditRun) return;
-    audit.state = "error";
+    auditViews[which].state = "error";
   } finally {
-    if (run === auditRun) { renderAudit(); btn.disabled = false; btn.textContent = "Refresh"; }
+    if (which === auditView) renderAudit();
+    if (run === auditRun) { btn.disabled = false; btn.textContent = "Refresh"; }
   }
 }
+document.querySelectorAll("#seg-audit button").forEach(b => b.addEventListener("click", () => {
+  auditView = b.dataset.view;
+  document.querySelectorAll("#seg-audit button").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+  renderAudit();
+  if (auditViews[auditView].state === "idle") loadAudit();
+}));
 $("a-refresh").addEventListener("click", loadAudit);
 $("a-copy").addEventListener("click", async e => {
   const btn = e.currentTarget;
@@ -2845,7 +3004,7 @@ function showTab(name, updateHash) {
   if (updateHash) history.replaceState(null, "", name === "xii" ? "#club-xii" : name === "hl" ? "#highlights" : name === "audit" ? "#audit" : name === "scores" ? "#scores" : name === "jscores" ? "#junior-scores" : name === "milestones" ? "#milestones" : name === "records" ? "#records" : location.pathname + location.search);
   if (name === "xii") { if (xii.state === "idle") loadXII(); }
   else if (name === "hl") { if (hl.state === "idle") loadHL(); }
-  else if (name === "audit") { if (audit.state === "idle") loadAudit(); }
+  else if (name === "audit") { if (auditViews[auditView].state === "idle") loadAudit(); }
   else if (name === "scores") { if (seniorScores.get().state === "idle") seniorScores.load(); }
   else if (name === "jscores") { if (juniorScores.get().state === "idle") juniorScores.load(); }
   else if (name === "records") { if (recViews[recView].state === "idle") loadRecords(); }
