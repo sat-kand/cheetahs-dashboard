@@ -265,6 +265,7 @@ td.num { font-weight: 700; color: var(--heading); }
     <button type="button" class="tab" role="tab" id="tab-jscores" data-tab="jscores" aria-controls="panel-jscores" aria-selected="false">Junior Scores</button>
     <button type="button" class="tab" role="tab" id="tab-milestones" data-tab="milestones" aria-controls="panel-milestones" aria-selected="false">Milestones</button>
     <button type="button" class="tab" role="tab" id="tab-xii" data-tab="xii" aria-controls="panel-xii" aria-selected="false">Club XII</button>
+    <button type="button" class="tab" role="tab" id="tab-hl" data-tab="hl" aria-controls="panel-hl" aria-selected="false">Highlights</button>
     <button type="button" class="tab" role="tab" id="tab-audit" data-tab="audit" aria-controls="panel-audit" aria-selected="false">Scorecard Audit</button>
     <button type="button" class="tab" role="tab" id="tab-records" data-tab="records" aria-controls="panel-records" aria-selected="false">Records</button>
   </div>
@@ -347,6 +348,17 @@ td.num { font-weight: 700; color: var(--heading); }
       <div class="grid xii-grid" id="x-grid"></div>
     </section>
     </div>
+  <div class="panel" id="panel-hl" role="tabpanel" aria-labelledby="tab-hl" hidden>
+    <div class="toolbar">
+      <div class="actions"><button type="button" class="refresh" id="h-refresh">Refresh</button><button type="button" class="copy" id="h-copy">Copy list</button></div>
+    </div>
+    <section class="block" aria-labelledby="h-hl">
+      <h2 id="h-hl">Senior 50+ scores of the round</h2>
+      <p class="blurb">Every senior player who scored 50 or more in a single innings in the club's most recently played round, highest score first. A two-day match can give a player two innings, and each 50 is listed.</p>
+      <div class="summary" id="h-summary">Loading the most recently played round…</div>
+      <div class="grid xii-grid" id="h-grid"></div>
+    </section>
+  </div>
   <div class="panel scores-panel" id="panel-scores" role="tabpanel" aria-labelledby="tab-scores">
     <div class="scores-head">
       <div class="scores-title" id="s-title">Loading the current round…</div>
@@ -676,11 +688,8 @@ async function findLastRound(api, now) {
   if (failedTeams || !played.length) return { round: null, failedTeams, teamIds };
   return { round: played[0], failedTeams, teamIds };
 }
-async function buildClubXII(api, now) {
-  const { round, failedTeams, teamIds } = await findLastRound(api, now);
-  if (!round) return { round: null, failedTeams };
-
-  /* Everyone in a club squad for those matches */
+/* Everyone in a club squad for the round's matches, with the grade they played each match in. */
+async function roundRoster(api, round, teamIds) {
   const roster = new Map();
   await mapLimit([...round.matches.keys()], 6, async id => {
     const detail = await api.getMatch(id);
@@ -694,6 +703,12 @@ async function buildClubXII(api, now) {
       }
     }
   });
+  return roster;
+}
+async function buildClubXII(api, now) {
+  const { round, failedTeams, teamIds } = await findLastRound(api, now);
+  if (!round) return { round: null, failedTeams };
+  const roster = await roundRoster(api, round, teamIds);
   let failed = 0;
   const players = [];
   await mapLimit([...roster.values()], 6, async e => {
@@ -727,6 +742,35 @@ async function buildClubXII(api, now) {
   });
   return { round: { name: round.name, season: round.season, first: round.first, last: round.last, matches: round.matches.size },
            players, failed, failedTeams, xii: selectXII(players) };
+}
+
+/* ---- Highlights: 50+ scores of the round ---- */
+const HL_MIN_RUNS = 50;
+/* Every club innings of HL_MIN_RUNS or more in the most recently played senior round (the same round as the Club XII). */
+async function buildFifties(api, now) {
+  const { round, failedTeams, teamIds } = await findLastRound(api, now);
+  if (!round) return { round: null, failedTeams };
+  const roster = await roundRoster(api, round, teamIds);
+  let failed = 0;
+  const list = [];
+  await mapLimit([...roster.values()], 6, async e => {
+    let perf;
+    try { perf = await api.getPerf(e.id, round.seasonId); } catch (x) { failed++; return; }
+    for (const m of (Array.isArray(perf) ? perf : [])) {
+      if (!e.grades.has(m.id)) continue;
+      const bats = m.battingStatistics || [];
+      bats.forEach((b, i) => {
+        const runs = Number(b.runsScored) || 0;
+        if (runs < HL_MIN_RUNS) return;
+        const grade = e.grades.get(m.id);
+        const status = (round.matches.get(m.id) || {}).status;
+        list.push({ id: e.id, name: e.name, runs, notOut: Number(b.dismissalTypeId) === 1, balls: Number(b.ballsFaced) || 0,
+          innings: bats.length > 1 ? i + 1 : 0, grade, rank: gradeRank(grade), live: NOT_FINISHED.has(String(status || "").toUpperCase()) });
+      });
+    }
+  });
+  list.sort((a, b) => b.runs - a.runs || (b.notOut - a.notOut) || a.rank - b.rank || a.name.localeCompare(b.name));
+  return { round: { name: round.name, season: round.season, first: round.first, last: round.last, matches: round.matches.size }, list, failed, failedTeams };
 }
 
 /* ---- Scorecard audit ---- */
@@ -1803,6 +1847,91 @@ $("x-copy").addEventListener("click", async e => {
 });
 
 
+/* ---- Highlights tab ---- */
+let hl = { state: "idle", data: null, at: null };
+function hlScore(p) { return p.runs + (p.notOut ? "*" : "") + (p.balls ? " (" + p.balls + " balls)" : ""); }
+function hlWhere(p) { return shortGrade(p.grade) + (p.innings ? ", innings " + p.innings : ""); }
+function renderHL() {
+  const sum = $("h-summary"), grid = $("h-grid");
+  grid.innerHTML = "";
+  if (hl.state === "loading" && !hl.data) { sum.textContent = "Loading the most recently played round…"; return; }
+  if (hl.state === "error" && !hl.data) {
+    sum.innerHTML = '<span class="bad" style="margin:0">Could not load the round from Play Cricket. Press Refresh to try again.</span>';
+    return;
+  }
+  const d = hl.data;
+  if (!d.round) {
+    sum.innerHTML = d.failedTeams
+      ? '<span class="bad" style="margin:0">Could not read the fixtures for ' + plural(d.failedTeams, "team", "teams") + ", so the most recently played round cannot be worked out. Press Refresh to try again.</span>"
+      : "<strong>No senior round has been played yet.</strong>";
+    return;
+  }
+  const r = d.round;
+  sum.innerHTML = "<strong>" + r.name + "</strong> (" + xiiRounds(r) + ", " + r.season + "): " + plural(d.list.length, "score", "scores") + " of " + HL_MIN_RUNS + " or more across " + plural(r.matches, "senior match", "senior matches") + ".";
+  if (d.list.some(p => p.live)) sum.innerHTML += '<span class="bad">Scores marked "Not finished" are from matches still in progress and may change.</span>';
+  if (hl.state === "error") sum.innerHTML += '<span class="bad">Could not refresh, so this is from ' + fmtDate(hl.at) + ". Press Refresh to try again.</span>";
+  if (d.failed > 0) sum.innerHTML += '<span class="bad">Could not check ' + plural(d.failed, "player", "players") + ", so they may be missing. Press Refresh to try again.</span>";
+  const card = document.createElement("section");
+  card.className = "card";
+  card.setAttribute("aria-label", HL_MIN_RUNS + "+ scores");
+  const head = document.createElement("div");
+  head.className = "card-head";
+  head.innerHTML = '<span class="big">' + d.list.length + '</span><span class="label">' + HL_MIN_RUNS + "+ scores</span>";
+  card.appendChild(head);
+  if (!d.list.length) {
+    const p = document.createElement("p"); p.className = "empty"; p.textContent = "Nobody scored " + HL_MIN_RUNS + " or more this round."; card.appendChild(p);
+  } else {
+    const ul = document.createElement("ul");
+    d.list.forEach((p, i) => {
+      const li = document.createElement("li");
+      const nm = document.createElement("span"); nm.className = "name";
+      const num = document.createElement("span"); num.className = "xnum"; num.textContent = i + 1;
+      nm.append(num, document.createTextNode(p.name));
+      const meta = document.createElement("span"); meta.className = "meta";
+      const fig = document.createElement("span"); fig.textContent = hlScore(p);
+      const pill = document.createElement("span"); pill.className = "pill"; pill.textContent = hlWhere(p);
+      meta.append(fig, pill);
+      if (p.live) { const lv = document.createElement("span"); lv.className = "pill now"; lv.textContent = "Not finished"; meta.appendChild(lv); }
+      li.append(nm, meta);
+      ul.appendChild(li);
+    });
+    card.appendChild(ul);
+  }
+  grid.appendChild(card);
+}
+function hlText() {
+  const d = hl.data;
+  if (!d || !d.round) return "Parramatta Cheetahs senior " + HL_MIN_RUNS + "+ scores: no round played yet.";
+  const out = ["Parramatta Cheetahs senior " + HL_MIN_RUNS + "+ scores - " + d.round.name + " (" + xiiRounds(d.round) + ")", ""];
+  if (!d.list.length) out.push("Nobody scored " + HL_MIN_RUNS + " or more this round.");
+  d.list.forEach((p, i) => out.push((i + 1) + ". " + p.name + " (" + hlWhere(p) + ") - " + hlScore(p) + (p.live ? " (not finished)" : "")));
+  return out.join("\n");
+}
+let hlRun = 0;
+async function loadHL() {
+  const run = ++hlRun; /* a newer load replaces an older one still in flight */
+  const btn = $("h-refresh");
+  btn.disabled = true; btn.textContent = "Refreshing…";
+  hl.state = "loading"; renderHL();
+  try {
+    const data = await buildFifties(makeApi(), new Date());
+    if (run !== hlRun) return;
+    hl = { state: "ok", data, at: new Date().toISOString() };
+  } catch (e) {
+    if (run !== hlRun) return;
+    hl.state = "error";
+  } finally {
+    if (run === hlRun) { renderHL(); btn.disabled = false; btn.textContent = "Refresh"; }
+  }
+}
+$("h-refresh").addEventListener("click", loadHL);
+$("h-copy").addEventListener("click", async e => {
+  const btn = e.currentTarget;
+  try { await navigator.clipboard.writeText(hlText()); btn.textContent = "Copied"; }
+  catch (err) { btn.textContent = "Copy not available"; }
+  setTimeout(() => { btn.textContent = "Copy list"; }, 2000);
+});
+
 /* ---- Scorecard audit tab ---- */
 let audit = { state: "idle", data: null, at: null };
 const ISSUE_ORDER = ["status", "keeper", "batting", "bowling", "fielding", "names"];
@@ -2129,9 +2258,10 @@ document.querySelectorAll("#seg-records button").forEach(b => b.addEventListener
 let milestonesLoaded = false;
 function showTab(name, updateHash) {
   for (const t of document.querySelectorAll(".tab")) t.setAttribute("aria-selected", String(t.dataset.tab === name));
-  for (const n of ["milestones", "xii", "audit", "scores", "jscores", "records"]) $("panel-" + n).hidden = name !== n;
-  if (updateHash) history.replaceState(null, "", name === "xii" ? "#club-xii" : name === "audit" ? "#audit" : name === "scores" ? "#scores" : name === "jscores" ? "#junior-scores" : name === "milestones" ? "#milestones" : name === "records" ? "#records" : location.pathname + location.search);
+  for (const n of ["milestones", "xii", "hl", "audit", "scores", "jscores", "records"]) $("panel-" + n).hidden = name !== n;
+  if (updateHash) history.replaceState(null, "", name === "xii" ? "#club-xii" : name === "hl" ? "#highlights" : name === "audit" ? "#audit" : name === "scores" ? "#scores" : name === "jscores" ? "#junior-scores" : name === "milestones" ? "#milestones" : name === "records" ? "#records" : location.pathname + location.search);
   if (name === "xii") loadXII();
+  else if (name === "hl") loadHL();
   else if (name === "audit") loadAudit();
   else if (name === "scores") seniorScores.load();
   else if (name === "jscores") juniorScores.load();
@@ -2146,7 +2276,7 @@ document.querySelector(".tabs").addEventListener("keydown", e => {
   next.focus(); showTab(next.dataset.tab, true);
 });
 sections.forEach(renderSection); renderWatch();
-showTab(location.hash === "#club-xii" ? "xii" : location.hash === "#audit" ? "audit" : location.hash === "#scores" ? "scores" : location.hash === "#junior-scores" ? "jscores" : location.hash === "#milestones" ? "milestones" : location.hash === "#records" ? "records" : "scores", false);
+showTab(location.hash === "#club-xii" ? "xii" : location.hash === "#highlights" ? "hl" : location.hash === "#audit" ? "audit" : location.hash === "#scores" ? "scores" : location.hash === "#junior-scores" ? "jscores" : location.hash === "#milestones" ? "milestones" : location.hash === "#records" ? "records" : "scores", false);
 </script>
 </body>
 </html>
