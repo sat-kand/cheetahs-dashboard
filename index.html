@@ -232,6 +232,8 @@ td.num { font-weight: 700; color: var(--heading); }
 .srow .ytb { color: var(--muted); font-size: 0.86rem; }
 .srow .l2 { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .srow .venue { display: inline-flex; align-items: center; gap: 4px; min-width: 0; color: var(--muted); font-size: 0.8rem; }
+.srow .time { flex: none; }
+.srow .l2 { justify-content: flex-start; }
 .srow .venue svg { flex: none; width: 12px; height: 12px; fill: currentColor; }
 .srow .venue span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .srow .l2 .st { flex: none; margin-left: auto; }
@@ -1104,7 +1106,18 @@ function isJuniorTeam(t) {
    convention, still used by Junior Records (makeApi()) - PlayHQ's own team name is just the club's name (e.g.
    "Parramatta CCC", or "Parramatta CCC (Brown)" with a brand suffix), never the grade, so it falls back to
    gradeLabel (t.grade.name, with that same brand suffix appended) whenever the name has no grade in it. */
+/* PlayHQ names a junior team only by its colour ("Parramatta CCC White", with the age group in the grade name), and has no
+   coach at all. The coach shown in brackets is kept here by hand, keyed by the label without it. */
+const JUNIOR_COACHES = { "U10 White": "Murali", "U10 Blue": "Parveen", "Girls Stage 1 Brown": "Surendra" };
 function juniorLabel(t) {
+  const pq = String(t.name || "").match(/^parramatta ccc\s+(.+)$/i);
+  const gname = (t.grade && t.grade.name) || "";
+  const age = gname.match(/^U\s?\d{1,2}/i);
+  if (pq && age) {
+    const colour = pq[1].replace(/\s+[A-Z]$/, "").trim(); /* "Blue B" -> "Blue": the trailing letter only tells sides apart */
+    const label = /girl/i.test(gname) ? "Girls Stage 1 " + colour : age[0].toUpperCase().replace(/\s/g, "") + " " + colour;
+    return JUNIOR_COACHES[label] ? label + " (" + JUNIOR_COACHES[label] + ")" : label;
+  }
   const base = String(t.name || "").replace(/\s*\([^)]*\)\s*$/, "").trim();
   if (/^parramatta ccc$/i.test(base) && t.grade && t.grade.name) return gradeLabel(t);
   const s = String(t.name || "").replace(/^juniors?\s+/i, "").replace(/\s*\(\s*([^)]*?)\s*\)/g, " ($1)").replace(/\s+/g, " ").trim();
@@ -1177,7 +1190,7 @@ async function buildScores(api, now, kind) {
         const venue = (m.venue && (m.venue.name || (m.venue.playingSurface && m.venue.playingSurface.name))) || "";
         /* a match between two of our teams gets a row for each of them */
         all.push({ ...base, first: days[0], last: days[days.length - 1],
-          row: { id: m.id, venue: String(venue).trim(), grade, rank, outcome, usId: us && us.id, themId: them && them.id,
+          row: { id: m.id, venue: String(venue).trim(), time: m.startTime || "", grade, rank, outcome, usId: us && us.id, themId: them && them.id,
             us: inningsFromText(us), them: { name: "", club, display: them && them.displayName, innings: inningsFromText(them) } } });
       }
     });
@@ -1225,7 +1238,19 @@ async function buildScores(api, now, kind) {
     chosen.forEach(e => count.set(e.key, (count.get(e.key) || 0) + 1));
     const topKey = [...count].sort((a, b) => b[1] - a[1])[0][0];
     const top = chosen.find(e => e.key === topKey);
-    return { picked: chosen.concat(matchingByes([...count.keys()], week, weekEnd, new Set(perTeam.keys()))),
+    const realByes = matchingByes([...count.keys()], week, weekEnd, new Set(perTeam.keys()));
+    /* PlayHQ leaves a bye out of a team's fixtures altogether, so a junior team with fixtures both before and after this
+       week but none in it is on a bye (a team whose season is over has nothing after, so it is not counted). */
+    const have = new Set([...perTeam.keys(), ...realByes.map(x => x.teamId)]);
+    const inferred = [];
+    for (const [tid, info] of teamInfo) {
+      if (have.has(tid)) continue;
+      const mine = all.filter(e => e.teamId === tid);
+      if (!(mine.some(e => e.last < week) && mine.some(e => e.first > weekEnd))) continue;
+      inferred.push({ teamId: tid, key: "", first: "", last: "",
+        row: { id: "bye" + tid, grade: info.grade, rank: info.rank, outcome: "bye", us: [], them: { name: "", innings: [] } } });
+    }
+    return { picked: chosen.concat(realByes, inferred),
              name: count.size > 1 ? "This week" : top.roundName, season: top.season };
   }
   function seniorRound(pool, forward) {
@@ -1820,6 +1845,7 @@ function phqFixtureToLegacy(g) {
     round: { name: g.round && g.round.name },
     status: phqStatus(g.status),
     matchSchedule: (g.schedule && g.schedule.date) ? [{ startDateTime: phqLocalToISO(g.schedule.date, g.schedule.time) }] : [],
+    startTime: (g.schedule && g.schedule.time) || "",
     venue: { name: g.venue && g.venue.name },
     resultText: phqResultText(comps),
     teams: comps.map(c => ({ id: c.id, isWinner: phqIsWinner(c.outcome), displayName: c.name, owningOrganisation: { name: c.name } }))
@@ -2547,6 +2573,13 @@ function inningsNode(list) {
   });
   return sc;
 }
+/* "08:15:00" -> "8:15am" */
+function fmtTime12(t) {
+  const m = String(t).match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return String(t);
+  const h = Number(m[1]);
+  return ((h % 12) || 12) + ":" + m[2] + (h < 12 ? "am" : "pm");
+}
 function scoresTab(prefix, kind, word) {
   let state = { state: "idle", data: null, at: null };
   let runNo = 0;
@@ -2586,6 +2619,13 @@ function scoresTab(prefix, kind, word) {
       }
       row.appendChild(l1);
       const l2 = document.createElement("div"); l2.className = "l2";
+      if (kind === "junior" && r.outcome === "upcoming" && r.time) {
+        const tm = document.createElement("span"); tm.className = "venue time";
+        tm.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm.5-13H11v6l5.2 3.2.8-1.3-4.5-2.7V7z"/></svg>';
+        const tn = document.createElement("span"); tn.textContent = fmtTime12(r.time);
+        tm.appendChild(tn);
+        l2.appendChild(tm);
+      }
       if (r.venue) {
         const v = document.createElement("span"); v.className = "venue";
         v.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>';
