@@ -1084,8 +1084,13 @@ function isJuniorTeam(t) {
   return !isSeniorTeam(t) && !/t20|twenty20/i.test(text);
 }
 /* "Juniors U10 Blue(Parveen)" becomes "U10 Blue (Parveen)": the team's own name, keeping the coach in brackets
-   where the team has one (the girls, under 10 and under 11 teams). */
+   where the team has one (the girls, under 10 and under 11 teams). This is a Play Cricket junior team's naming
+   convention, still used by Junior Records (makeApi()) - PlayHQ's own team name is just the club's name (e.g.
+   "Parramatta CCC", or "Parramatta CCC (Brown)" with a brand suffix), never the grade, so it falls back to
+   gradeLabel (t.grade.name, with that same brand suffix appended) whenever the name has no grade in it. */
 function juniorLabel(t) {
+  const base = String(t.name || "").replace(/\s*\([^)]*\)\s*$/, "").trim();
+  if (/^parramatta ccc$/i.test(base) && t.grade && t.grade.name) return gradeLabel(t);
   const s = String(t.name || "").replace(/^juniors?\s+/i, "").replace(/\s*\(\s*([^)]*?)\s*\)/g, " ($1)").replace(/\s+/g, " ").trim();
   return s || gradeLabel(t);
 }
