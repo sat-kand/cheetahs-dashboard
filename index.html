@@ -233,6 +233,8 @@ td.num { font-weight: 700; color: var(--heading); }
 .srow .l2 { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .srow .venue { display: inline-flex; align-items: center; gap: 4px; min-width: 0; color: var(--muted); font-size: 0.8rem; }
 .srow .time { flex: none; }
+.srow .l3 { margin-top: 4px; }
+.srow .nolist { display: inline-block; padding: 1px 8px; border-radius: 999px; background: #fde8e8; color: #b42318; border: 1px solid #f5b5b0; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; }
 .srow .l2 { justify-content: flex-start; }
 .srow .venue svg { flex: none; width: 12px; height: 12px; fill: currentColor; }
 .srow .venue span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1316,6 +1318,17 @@ async function buildScores(api, now, kind) {
         r.us = inningsFromScorecard(sc, r.usId);
         if (r.themId) r.them.innings = inningsFromScorecard(sc, r.themId);
       } catch (e) { /* keep the fixture figures */ }
+    });
+  }
+  /* An upcoming game whose team sheet for our side has no players yet gets flagged. A lookup that fails is left unflagged
+     rather than guessed at. */
+  if (api.getScorecardFresh) {
+    await mapLimit(rows.filter(r => r.usId && r.outcome === "upcoming"), 6, async r => {
+      try {
+        const sc = await api.getScorecardFresh(r.id);
+        const side = sc && (sc.teams || []).find(t => t.id === r.usId);
+        r.noTeamList = !side || !(side.players || []).length;
+      } catch (e) { /* leave unflagged */ }
     });
   }
   return { round, rows, failedTeams };
@@ -2657,6 +2670,11 @@ function scoresTab(prefix, kind, word) {
       const st = document.createElement("span"); st.className = "st " + r.outcome; st.textContent = OUTCOME_LABEL[r.outcome] || r.outcome;
       l2.appendChild(st);
       row.appendChild(l2);
+      if (r.outcome === "upcoming" && r.noTeamList) {
+        const l3 = document.createElement("div"); l3.className = "l3";
+        const tag = document.createElement("span"); tag.className = "nolist"; tag.textContent = "No Team List";
+        l3.appendChild(tag); row.appendChild(l3);
+      }
       list.appendChild(row);
     }
   }
