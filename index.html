@@ -1712,15 +1712,17 @@ function phqAdaptScorecard(d) {
     players: (d.appearances || []).filter(a => a.teamId === t.id).map(a => ({ participantId: a.id, name: fullName(a.id), roles: [] }))
   }));
   const stat = (arr, type) => { const e = (arr || []).find(x => x.type === type); return e ? e.value : 0; };
-  /* A CAUGHT/STUMPED/RUN_OUT entry with no FIELDING-role appearance isn't a completed dismissal -
-     PlayHQ logs a dropped/missed chance under the same stat type, with no bowler or fielder attached
-     since nobody actually completed it. Confirmed empirically: a real match had 6 CAUGHT entries for
-     one innings but only 5 had a fielder; the 6th named a batter who was in fact not out. BOWLED and
-     LBW never involve a fielder, so they're exempt from this check. */
+  /* A CAUGHT/STUMPED/RUN_OUT entry with no one but the batter attached isn't a completed dismissal -
+     PlayHQ logs a dropped/missed chance under the same stat type, with no bowler or fielder credited
+     since nobody actually completed it. Confirmed empirically: a real match had a CAUGHT entry naming
+     only the batter, who was in fact not out. A caught-and-bowled dismissal has BATTING + BOWLING but
+     no separate FIELDING entry (the bowler is the catcher), so this checks for any second participant
+     rather than specifically a FIELDING role. BOWLED and LBW never involve a fielder, so they're
+     exempt from this check. */
   const NEEDS_FIELDER = new Set(["CAUGHT", "STUMPED", "RUN_OUT"]);
   const dismissedBy = (sharedStats, appearanceId, type) => (sharedStats || []).some(s => s.type === type &&
     (s.appearances || []).some(x => x.role === "BATTING" && x.id === appearanceId) &&
-    (!NEEDS_FIELDER.has(type) || (s.appearances || []).some(x => x.role === "FIELDING")));
+    (!NEEDS_FIELDER.has(type) || (s.appearances || []).some(x => x.role !== "BATTING")));
   const battedBefore = new Map();
   const innings = [];
   for (const period of (d.periods || [])) {
