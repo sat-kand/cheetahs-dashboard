@@ -1737,6 +1737,31 @@ async function careerLists(api) {
 /* ---- Junior records ----
    The club's career totals cover every grade at once, so for juniors each junior team's own statistics are read
    season by season and added up. That also gives the candidates for the best individual innings. */
+/* Most matches as coach, assistant coach and manager, from each completed junior match's team sheet (Play Cricket's
+   non-playing members and their roles). A person counts once per match per role, whichever of our teams it was. */
+async function juniorOfficials(api, rows) {
+  const tally = { coach: new Map(), assistant: new Map(), manager: new Map() };
+  const roleOf = r => /assist/i.test(r) ? "assistant" : /manag/i.test(r) ? "manager" : /coach/i.test(r) ? "coach" : "";
+  await mapLimit(rows, 10, async r => {
+    let d;
+    try { d = await api.getMatch(r.id); } catch (e) { return; }
+    const side = (d.Teams || d.teams || []).find(t => (t.Id || t.id) === r.teamId);
+    for (const m of ((side && (side.NonPlayingMembers || side.nonPlayingMembers)) || [])) {
+      const name = displayName(tidyName(m.Name || m.name || ""));
+      if (!name || isHiddenName(name)) continue;
+      const roles = new Set((m.Roles || m.roles || []).map(roleOf).filter(Boolean));
+      for (const role of roles) {
+        const e = tally[role].get(name) || { who: name, matches: new Set(), teams: new Set() };
+        e.matches.add(r.id);
+        e.teams.add(String(r.grade).replace(/\s*\([^)]*\)/g, "").trim());
+        tally[role].set(name, e);
+      }
+    }
+  });
+  const top = m => [...m.values()].map(e => ({ who: e.who, value: e.matches.size, det: [...e.teams].sort((a, b) => juniorRank(a) - juniorRank(b) || a.localeCompare(b)).join(", ") }))
+    .sort((a, b) => b.value - a.value || a.who.localeCompare(b.who)).slice(0, RECORDS_TOP);
+  return { coach: top(tally.coach), assistant: top(tally.assistant), manager: top(tally.manager) };
+}
 async function buildJuniorRecords(api) {
   const seasons = await api.getSeasons();
   const rows = new Map();
@@ -1802,9 +1827,10 @@ async function buildJuniorRecords(api) {
     return [...best.values()].sort((a, b) => b.claim - a.claim);
   };
   const mapFor = id => juniorBySeason.get(id);
-  const [bat, bowl] = await Promise.all([verifyTop(api, "bat", dedupe(cands.bat), mapFor), verifyTop(api, "bowl", dedupe(cands.bowl), mapFor)]);
+  const [bat, bowl, officials] = await Promise.all([verifyTop(api, "bat", dedupe(cands.bat), mapFor), verifyTop(api, "bowl", dedupe(cands.bowl), mapFor), juniorOfficials(api, all)]);
   records.batting = bat;
   records.bowling = bowl;
+  Object.assign(records.career, officials);
   return { matches: all.length, first: dates[0] || "", last: dates[dates.length - 1] || "", failed, records };
 }
 
@@ -3053,13 +3079,16 @@ function renderRecords() {
   const groups = [["Most matches", career.matches, "matches"], ["Most runs", career.runs, "runs"],
                   ["Most wickets", career.wickets, "wickets"], ["Most dismissals", career.dismissals, "dismissals"]]
     .concat(junior ? [] : [["Most premierships", premiershipList()]]) /* the juniors have no titles yet */
+    .concat(junior ? [["Most matches as coach", career.coach, "officials"],
+                      ["Most matches as assistant coach", career.assistant, "officials", "No assistant coaches are named on the team sheets yet."],
+                      ["Most matches as manager", career.manager, "officials", "No managers are named on the team sheets yet."]] : [])
     .concat([["Highest individual score", d.records.batting], ["Best bowling in an innings", d.records.bowling],
              ["Highest team total", d.records.totals], ["Highest score chased", d.records.chases],
              ["Biggest win by runs", d.records.runs], ["Biggest innings win", d.records.innings]]);
-  for (const [title, list, careerKey] of groups) {
+  for (const [title, list, careerKey, emptyText] of groups) {
     const card = document.createElement("section"); card.className = "card"; card.setAttribute("aria-label", title);
     const h = document.createElement("h3"); h.textContent = title; card.appendChild(h);
-    if (!list || !list.length) { const p = document.createElement("p"); p.className = "empty"; p.textContent = "None recorded."; card.appendChild(p); }
+    if (!list || !list.length) { const p = document.createElement("p"); p.className = "empty"; p.textContent = emptyText || "None recorded."; card.appendChild(p); }
     const ul = document.createElement("ul");
     (list || []).forEach((e, i) => {
       const r = e.row;
