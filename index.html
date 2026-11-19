@@ -354,9 +354,15 @@ td.num { font-weight: 700; color: var(--heading); }
     </div>
     <section class="block" aria-labelledby="h-hl">
       <h2 id="h-hl">Senior 50+ scores of the round</h2>
-      <p class="blurb">Every senior player who scored 50 or more in a single innings in the club's most recently played round, highest score first. A two-day match can give a player two innings, and each 50 is listed.</p>
+      <p class="blurb">Every senior player who scored 50 or more in a single innings in the club's most recently played round, highest grade first, then highest score. A two-day match can give a player two innings, and each 50 is listed.</p>
       <div class="summary" id="h-summary">Loading the most recently played round…</div>
       <div class="grid xii-grid" id="h-grid"></div>
+    </section>
+    <section class="block" aria-labelledby="h-hlj">
+      <h2 id="h-hlj">Junior 25+ scores of the round</h2>
+      <p class="blurb">Every junior player who scored 25 or more in a single innings in their team's latest match. Junior grades number their rounds separately, so each team's own last match is used, from the most recent week of junior cricket. Oldest age group first, then highest score.</p>
+      <div class="summary" id="hj-summary">Loading each junior team's latest match…</div>
+      <div class="grid xii-grid" id="hj-grid"></div>
     </section>
   </div>
   <div class="panel scores-panel" id="panel-scores" role="tabpanel" aria-labelledby="tab-scores">
@@ -769,8 +775,75 @@ async function buildFifties(api, now) {
       });
     }
   });
-  list.sort((a, b) => b.runs - a.runs || (b.notOut - a.notOut) || a.rank - b.rank || a.name.localeCompare(b.name));
+  list.sort(hlOrder);
   return { round: { name: round.name, season: round.season, first: round.first, last: round.last, matches: round.matches.size }, list, failed, failedTeams };
+}
+/* Highest grade first (rank: lower is higher), then highest score, not out ahead on equal runs. */
+function hlOrder(a, b) {
+  return a.rank - b.rank || String(a.grade).localeCompare(String(b.grade)) || b.runs - a.runs || (b.notOut - a.notOut) || a.name.localeCompare(b.name);
+}
+const HL_JUNIOR_MIN_RUNS = 25;
+/* Juniors: oldest age group first; teams without an age (rare) go last. */
+function juniorHighRank(label) {
+  const m = String(label).match(/\bU\s?(\d{1,2})\b/i);
+  return m ? 100 - Number(m[1]) : 200;
+}
+/* Junior innings of HL_JUNIOR_MIN_RUNS or more. Junior grades number rounds separately, so for each junior team this
+   takes its latest match from the most recent week of junior cricket (the same matches as the Junior Scores tab). */
+async function buildJuniorHighlights(api, now) {
+  const seasons = newestSeasons(await api.getSeasons(), now, 2);
+  const today = ymdSydney(now);
+  const started = [];
+  let failedTeams = 0;
+  for (const s of seasons) {
+    const teams = (await api.getTeams(s.id)).filter(isJuniorTeam);
+    await mapLimit(teams, 6, async t => {
+      let list;
+      try { list = await api.getTeamMatches(t.id); } catch (e) { failedTeams++; return; }
+      for (const m of list) {
+        if (m.matchType === "BYE" || !m.round) continue;
+        const days = (m.matchSchedule || []).map(x => parseDate(x.startDateTime)).filter(d => !isNaN(d)).map(ymdSydney).sort();
+        if (!days.length || days[0] > today) continue;
+        started.push({ teamId: t.id, label: juniorLabel(t), seasonId: s.id, season: s.name, matchId: m.id, status: m.status,
+          roundName: m.round.name, first: days[0], last: days[days.length - 1] });
+      }
+    });
+  }
+  if (!started.length) return { round: null, failedTeams };
+  const week = mondayOf(started.map(e => e.first).sort().pop());
+  const perTeam = new Map();
+  for (const e of started.filter(x => x.last >= week)) {
+    const cur = perTeam.get(e.teamId);
+    if (!cur || e.first > cur.first) perTeam.set(e.teamId, e);
+  }
+  const picked = [...perTeam.values()];
+  /* squads from each match's team sheet, one entry per player per match */
+  const entries = [];
+  await mapLimit(picked, 6, async e => {
+    let detail;
+    try { detail = await api.getMatch(e.matchId); } catch (x) { return; }
+    const side = (detail.Teams || []).find(t => t.Id === e.teamId);
+    for (const pl of ((side && side.Players) || [])) entries.push({ id: pl.ParticipantId, name: tidyName(pl.Name), e });
+  });
+  let failed = 0;
+  const list = [];
+  await mapLimit(entries, 6, async x => {
+    let perf;
+    try { perf = await api.getPerf(x.id, x.e.seasonId); } catch (err) { failed++; return; }
+    const m = (Array.isArray(perf) ? perf : []).find(y => y.id === x.e.matchId);
+    if (!m) return;
+    const bats = m.battingStatistics || [];
+    bats.forEach((b, i) => {
+      const runs = Number(b.runsScored) || 0;
+      if (runs < HL_JUNIOR_MIN_RUNS) return;
+      list.push({ id: x.id, name: x.name, runs, notOut: Number(b.dismissalTypeId) === 1, balls: Number(b.ballsFaced) || 0,
+        innings: bats.length > 1 ? i + 1 : 0, grade: x.e.label, rank: juniorHighRank(x.e.label),
+        live: NOT_FINISHED.has(String(x.e.status || "").toUpperCase()) });
+    });
+  });
+  list.sort(hlOrder);
+  const dates = picked.map(e => e.first).concat(picked.map(e => e.last)).sort();
+  return { round: { first: dates[0], last: dates[dates.length - 1], season: picked[0].season, teams: picked.length }, list, failed, failedTeams };
 }
 
 /* ---- Scorecard audit ---- */
@@ -1851,35 +1924,36 @@ $("x-copy").addEventListener("click", async e => {
 let hl = { state: "idle", data: null, at: null };
 function hlScore(p) { return p.runs + (p.notOut ? "*" : "") + (p.balls ? " (" + p.balls + " balls)" : ""); }
 function hlWhere(p) { return shortGrade(p.grade) + (p.innings ? ", innings " + p.innings : ""); }
-function renderHL() {
-  const sum = $("h-summary"), grid = $("h-grid");
+/* One section: s = { sum, grid, min, data, where, loading } */
+function renderHLSection(s) {
+  const sum = $(s.sum), grid = $(s.grid);
   grid.innerHTML = "";
-  if (hl.state === "loading" && !hl.data) { sum.textContent = "Loading the most recently played round…"; return; }
+  if (hl.state === "loading" && !hl.data) { sum.textContent = s.loading; return; }
   if (hl.state === "error" && !hl.data) {
-    sum.innerHTML = '<span class="bad" style="margin:0">Could not load the round from Play Cricket. Press Refresh to try again.</span>';
+    sum.innerHTML = '<span class="bad" style="margin:0">Could not load the matches from Play Cricket. Press Refresh to try again.</span>';
     return;
   }
-  const d = hl.data;
+  const d = s.data;
   if (!d.round) {
     sum.innerHTML = d.failedTeams
-      ? '<span class="bad" style="margin:0">Could not read the fixtures for ' + plural(d.failedTeams, "team", "teams") + ", so the most recently played round cannot be worked out. Press Refresh to try again.</span>"
-      : "<strong>No senior round has been played yet.</strong>";
+      ? '<span class="bad" style="margin:0">Could not read the fixtures for ' + plural(d.failedTeams, "team", "teams") + ", so the latest matches cannot be worked out. Press Refresh to try again.</span>"
+      : "<strong>No matches have been played yet.</strong>";
     return;
   }
-  const r = d.round;
-  sum.innerHTML = "<strong>" + r.name + "</strong> (" + xiiRounds(r) + ", " + r.season + "): " + plural(d.list.length, "score", "scores") + " of " + HL_MIN_RUNS + " or more across " + plural(r.matches, "senior match", "senior matches") + ".";
+  sum.innerHTML = s.where(d) + plural(d.list.length, "score", "scores") + " of " + s.min + " or more.";
   if (d.list.some(p => p.live)) sum.innerHTML += '<span class="bad">Scores marked "Not finished" are from matches still in progress and may change.</span>';
   if (hl.state === "error") sum.innerHTML += '<span class="bad">Could not refresh, so this is from ' + fmtDate(hl.at) + ". Press Refresh to try again.</span>";
+  if (d.failedTeams > 0) sum.innerHTML += '<span class="bad">Could not read the fixtures for ' + plural(d.failedTeams, "team", "teams") + ", so some may be missing. Press Refresh to try again.</span>";
   if (d.failed > 0) sum.innerHTML += '<span class="bad">Could not check ' + plural(d.failed, "player", "players") + ", so they may be missing. Press Refresh to try again.</span>";
   const card = document.createElement("section");
   card.className = "card";
-  card.setAttribute("aria-label", HL_MIN_RUNS + "+ scores");
+  card.setAttribute("aria-label", s.min + "+ scores");
   const head = document.createElement("div");
   head.className = "card-head";
-  head.innerHTML = '<span class="big">' + d.list.length + '</span><span class="label">' + HL_MIN_RUNS + "+ scores</span>";
+  head.innerHTML = '<span class="big">' + d.list.length + '</span><span class="label">' + s.min + "+ scores</span>";
   card.appendChild(head);
   if (!d.list.length) {
-    const p = document.createElement("p"); p.className = "empty"; p.textContent = "Nobody scored " + HL_MIN_RUNS + " or more this round."; card.appendChild(p);
+    const p = document.createElement("p"); p.className = "empty"; p.textContent = "Nobody scored " + s.min + " or more."; card.appendChild(p);
   } else {
     const ul = document.createElement("ul");
     d.list.forEach((p, i) => {
@@ -1899,13 +1973,28 @@ function renderHL() {
   }
   grid.appendChild(card);
 }
+function hlJuniorDates(r) { return fmtDay(r.first) + (r.last !== r.first ? " to " + fmtDay(r.last) : ""); }
+function renderHL() {
+  const d = hl.data || {};
+  renderHLSection({ sum: "h-summary", grid: "h-grid", min: HL_MIN_RUNS, data: d.senior, loading: "Loading the most recently played round…",
+    where: x => "<strong>" + x.round.name + "</strong> (" + xiiRounds(x.round) + ", " + x.round.season + "), " + plural(x.round.matches, "senior match", "senior matches") + ": " });
+  renderHLSection({ sum: "hj-summary", grid: "hj-grid", min: HL_JUNIOR_MIN_RUNS, data: d.junior, loading: "Loading each junior team's latest match…",
+    where: x => "<strong>Latest junior matches</strong> (" + hlJuniorDates(x.round) + ", " + x.round.season + "), " + plural(x.round.teams, "team", "teams") + ": " });
+}
 function hlText() {
   const d = hl.data;
-  if (!d || !d.round) return "Parramatta Cheetahs senior " + HL_MIN_RUNS + "+ scores: no round played yet.";
-  const out = ["Parramatta Cheetahs senior " + HL_MIN_RUNS + "+ scores - " + d.round.name + " (" + xiiRounds(d.round) + ")", ""];
-  if (!d.list.length) out.push("Nobody scored " + HL_MIN_RUNS + " or more this round.");
-  d.list.forEach((p, i) => out.push((i + 1) + ". " + p.name + " (" + hlWhere(p) + ") - " + hlScore(p) + (p.live ? " (not finished)" : "")));
-  return out.join("\n");
+  if (!d) return "Parramatta Cheetahs highlights: not loaded yet.";
+  const out = [];
+  const add = (title, x, min) => {
+    if (!x || !x.round) { out.push(title + ": no matches played yet.", ""); return; }
+    out.push(title, "");
+    if (!x.list.length) out.push("Nobody scored " + min + " or more.");
+    x.list.forEach((p, i) => out.push((i + 1) + ". " + p.name + " (" + hlWhere(p) + ") - " + hlScore(p) + (p.live ? " (not finished)" : "")));
+    out.push("");
+  };
+  add("Parramatta Cheetahs senior " + HL_MIN_RUNS + "+ scores - " + (d.senior.round ? d.senior.round.name + " (" + xiiRounds(d.senior.round) + ")" : ""), d.senior, HL_MIN_RUNS);
+  add("Parramatta Cheetahs junior " + HL_JUNIOR_MIN_RUNS + "+ scores - latest matches" + (d.junior.round ? " (" + hlJuniorDates(d.junior.round) + ")" : ""), d.junior, HL_JUNIOR_MIN_RUNS);
+  return out.join("\n").trim();
 }
 let hlRun = 0;
 async function loadHL() {
@@ -1914,9 +2003,10 @@ async function loadHL() {
   btn.disabled = true; btn.textContent = "Refreshing…";
   hl.state = "loading"; renderHL();
   try {
-    const data = await buildFifties(makeApi(), new Date());
+    const api = makeApi();
+    const [senior, junior] = await Promise.all([buildFifties(api, new Date()), buildJuniorHighlights(api, new Date())]);
     if (run !== hlRun) return;
-    hl = { state: "ok", data, at: new Date().toISOString() };
+    hl = { state: "ok", data: { senior, junior }, at: new Date().toISOString() };
   } catch (e) {
     if (run !== hlRun) return;
     hl.state = "error";
