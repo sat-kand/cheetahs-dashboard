@@ -1265,7 +1265,7 @@ const JUNIOR_COACHES = {};
 let juniorCoachesLoad = null;
 function loadJuniorCoaches() {
   if (!juniorCoachesLoad) juniorCoachesLoad = (async () => {
-    const api = makeApi();
+    const api = pcApi();
     const seasons = newestSeasons(await api.getSeasons(), new Date(), 2);
     for (const s of seasons) for (const t of await api.getTeams(s.id)) {
       const m = String(t.name || "").match(/^(?:juniors?\s+)?(.+?)\s*\(\s*([^)]+?)\s*\)\s*$/i);
@@ -1851,14 +1851,68 @@ function crossings(data, win, cfg) {
 }
 /* LOGIC-END */
 
-async function getJSON(path) {
-  const r = await fetch(API_BASE + path);
-  if (!r.ok) throw new Error("HTTP " + r.status);
-  const t = await r.text();
-  return t ? JSON.parse(t) : {};
+/* Play Cricket responses, shared the same way as PlayHQ's (see phqJSON): one fetch per URL per visit for every tab
+   (Milestones, Records, coach names), and kept in the browser between visits when they can no longer change -
+   a past season's player histories, team fixtures and season stats (30 days), finished matches (7 days) and the
+   season and team lists (12 hours). Career totals and the current seasons are fetched each visit.
+   The Milestones and Records Refresh buttons call pcReset(), which drops all of it. */
+const PC_HTTP_CACHE = new Map();
+const PC_STORE = "pc-v1";
+const DAY_MS = 24 * 3600 * 1000;
+async function pcStoreGet(path) {
+  try {
+    if (!window.caches) return null;
+    const r = await (await caches.open(PC_STORE)).match(API_BASE + path);
+    if (!r) return null;
+    if (Date.now() > Number(r.headers.get("x-until") || 0)) { (await caches.open(PC_STORE)).delete(API_BASE + path); return null; }
+    return await r.json();
+  } catch (e) { return null; }
 }
+function pcStorePut(path, text, ms) {
+  try {
+    if (!window.caches || !ms) return;
+    caches.open(PC_STORE).then(c => c.put(API_BASE + path, new Response(text, { headers: { "Content-Type": "application/json", "x-until": String(Date.now() + ms) } }))).catch(() => {});
+  } catch (e) { /* storage unavailable: memory only */ }
+}
+/* keep(json) -> how long to keep this response between visits, in ms (0: this visit only) */
+async function getJSON(path, keep) {
+  if (PC_HTTP_CACHE.has(path)) return PC_HTTP_CACHE.get(path);
+  const p = (async () => {
+    if (keep) { const kept = await pcStoreGet(path); if (kept) return kept; }
+    const r = await fetch(API_BASE + path);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const t = await r.text();
+    const j = t ? JSON.parse(t) : {};
+    if (keep) pcStorePut(path, t, keep(j));
+    return j;
+  })();
+  PC_HTTP_CACHE.set(path, p);
+  p.catch(() => { if (PC_HTTP_CACHE.get(path) === p) PC_HTTP_CACHE.delete(path); });
+  return p;
+}
+let PC_SHARED = null;
+function pcApi() { return PC_SHARED || (PC_SHARED = makeApi()); }
+function pcReset() {
+  PC_HTTP_CACHE.clear();
+  PC_SHARED = null;
+  try { if (window.caches) caches.delete(PC_STORE); } catch (e) { /* nothing kept */ }
+}
+const PC_DONE = /^(COMPLETED|ABANDONED|CANCELLED)/;
+const keepFor = ms => () => ms;
+const keepIfDone = ms => j => String((j && (j.status || j.Status)) || "").toUpperCase().match(PC_DONE) ? ms : 0;
+const keepIfAllDone = ms => j => { const l = (j && j.matches) || []; return l.length && l.every(m => PC_DONE.test(String(m.status || "").toUpperCase())) ? ms : 0; };
 function makeApi() {
   const memo = new Map();
+  /* A season other than the two newest that have started can no longer change. */
+  let pastIds = null;
+  const isPast = async sid => {
+    if (!sid) return false;
+    if (!pastIds) pastIds = getJSON("/fixturesladders/organisations/" + ORG + "/seasons?jsconfig=eccn%3Atrue", keepFor(DAY_MS / 2)).then(j => {
+      const all = j.seasons || [], recent = new Set(newestSeasons(all, new Date(), 2).map(x => x.id));
+      return new Set(all.filter(x => !recent.has(x.id) && x.startDate && parseDate(x.startDate) <= new Date()).map(x => x.id));
+    });
+    return (await pastIds).has(sid);
+  };
   const once = (key, fn) => {
     if (!memo.has(key)) memo.set(key, fn().catch(e => { memo.delete(key); throw e; }));
     return memo.get(key);
@@ -1872,13 +1926,14 @@ function makeApi() {
       const q = new URLSearchParams({ offset: "1", limit: String(limit || 25), sort: sort, jsconfig: "eccn:true" });
       if (seasonId) q.set("seasonId", seasonId); /* no season means the whole of the club's history */
       if (teamId) q.set("teamId", teamId);
-      return (await getJSON("/participants/organisations/" + ORG + "/" + kind + "?" + q.toString())).participants || [];
+      const past = await isPast(seasonId);
+      return (await getJSON("/participants/organisations/" + ORG + "/" + kind + "?" + q.toString(), past ? keepFor(30 * DAY_MS) : null)).participants || [];
     }),
     getMatchesPage: statsPage("batting-statistics", "Matches:desc"),
     getBowlPage: statsPage("bowling-statistics", "BowlingWickets:desc"),
     getBatPage: statsPage("batting-statistics", "BattingAggregate:desc"),
-    getSeasons: () => once("seasons", async () => (await getJSON("/fixturesladders/organisations/" + ORG + "/seasons?jsconfig=eccn%3Atrue")).seasons || []),
-    getTeams: id => once("teams" + id, async () => (await getJSON("/fixturesladders/organisations/" + ORG + "/teams?seasonId=" + id + "&jsconfig=eccn%3Atrue")).teams || []),
+    getSeasons: () => once("seasons", async () => (await getJSON("/fixturesladders/organisations/" + ORG + "/seasons?jsconfig=eccn%3Atrue", keepFor(DAY_MS / 2))).seasons || []),
+    getTeams: id => once("teams" + id, async () => (await getJSON("/fixturesladders/organisations/" + ORG + "/teams?seasonId=" + id + "&jsconfig=eccn%3Atrue", keepFor(DAY_MS / 2))).teams || []),
     getScorecardFresh: async id => {
       for (let i = 0; i < 3; i++) {
         try {
@@ -1889,7 +1944,7 @@ function makeApi() {
       return null;
     },
     getTeamMatchesFresh: async id => (await getJSON("/scores/teams/" + id + "/matches?jsconfig=eccn%3Atrue&_=" + Date.now())).matches || [],
-    getTeamMatches: id => once("tm" + id, async () => (await getJSON("/scores/teams/" + id + "/matches?jsconfig=eccn%3Atrue")).matches || []),
+    getTeamMatches: id => once("tm" + id, async () => (await getJSON("/scores/teams/" + id + "/matches?jsconfig=eccn%3Atrue", keepIfAllDone(30 * DAY_MS))).matches || []),
     /* Play Cricket now and then answers without the scorecard, or with an error, so try a few times with a short pause. */
     getScorecard: id => once("sc" + id, async () => {
       const urls = ["?responseModifier=includeScorecard", "?responseModifier=includeScorecard&jsconfig=eccn%3Atrue"];
@@ -1897,14 +1952,15 @@ function makeApi() {
       for (let i = 0; i < 6; i++) {
         if (i) await new Promise(r => setTimeout(r, 400 * i));
         try {
-          last = lowerKeys(await getJSON("/scores/matches/" + id + urls[i % 2] + (i > 1 ? "&r=" + Date.now() : "")));
+          last = lowerKeys(await getJSON("/scores/matches/" + id + urls[i % 2] + (i > 1 ? "&r=" + Date.now() : ""), keepIfDone(7 * DAY_MS)));
           if (Array.isArray(last.innings)) return last;
         } catch (e) { /* try again */ }
       }
       return last;
     }),
-    getMatch: id => once("match" + id, () => getJSON("/scores/matches/" + id)),
-    getPerf: (pid, sid) => once("perf" + pid + sid, () => getJSON("/scores/players/" + pid + "/match-performances?seasonId=" + sid + "&matchTypeId=&ageGroupCategoryId=&jsconfig=eccn%3Atrue"))
+    getMatch: id => once("match" + id, () => getJSON("/scores/matches/" + id, keepIfDone(7 * DAY_MS))),
+    getPerf: (pid, sid) => once("perf" + pid + sid, async () => getJSON("/scores/players/" + pid + "/match-performances?seasonId=" + sid + "&matchTypeId=&ageGroupCategoryId=&jsconfig=eccn%3Atrue",
+      (await isPast(sid)) ? keepFor(30 * DAY_MS) : null))
   };
 }
 
@@ -2432,7 +2488,7 @@ async function refreshActivity(api) {
 async function refresh() {
   const btn = $("refresh");
   btn.disabled = true; btn.textContent = "Refreshing…"; setStatus("loading");
-  const api = makeApi();
+  const api = pcApi();
   await Promise.all(sections.map(sec => refreshSection(sec, api)));
   if (sections.every(sec => sec.state === "error")) setStatus("error");
   else { asOf = new Date().toISOString(); setStatus("live"); }
@@ -2452,7 +2508,7 @@ $("copy").addEventListener("click", async (e) => {
   catch (err) { btn.textContent = "Copy not available"; }
   setTimeout(() => { btn.textContent = "Copy list"; }, 2000);
 });
-$("refresh").addEventListener("click", refresh);
+$("refresh").addEventListener("click", () => { pcReset(); refresh(); });
 
 /* ---- Club XII tab ---- */
 let xii = { state: "idle", data: null, at: null };
@@ -3030,25 +3086,26 @@ function renderRecords() {
   }
 }
 let recordsRun = 0;
+const recRuns = {};
 async function loadRecords(view) {
   const which = view || recView;
-  const run = ++recordsRun;
+  const run = recRuns[which] = (recRuns[which] || 0) + 1; /* each view counts its own loads */
   const btn = $("rec-refresh");
   btn.disabled = true; btn.textContent = "Refreshing…";
   recViews[which].state = "loading";
   if (which === recView) renderRecords();
   try {
-    const data = await (which === "junior" ? buildJuniorRecords(makeApi()) : buildRecords(makeApi()));
-    if (run !== recordsRun) return;
+    const data = await (which === "junior" ? buildJuniorRecords(pcApi()) : buildRecords(pcApi()));
+    if (run !== recRuns[which]) return;
     recViews[which] = { state: "ok", data };
   } catch (e) {
-    if (run !== recordsRun) return;
+    if (run !== recRuns[which]) return;
     recViews[which].state = "error";
   } finally {
-    if (run === recordsRun) { if (which === recView) renderRecords(); btn.disabled = false; btn.textContent = "Refresh"; }
+    if (run === recRuns[which]) { if (which === recView) renderRecords(); btn.disabled = false; btn.textContent = "Refresh"; }
   }
 }
-$("rec-refresh").addEventListener("click", () => loadRecords());
+$("rec-refresh").addEventListener("click", () => { pcReset(); loadRecords(); });
 document.querySelectorAll("#seg-records button").forEach(b => b.addEventListener("click", () => {
   recView = b.dataset.view;
   document.querySelectorAll("#seg-records button").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
@@ -3087,7 +3144,10 @@ async function preloadTabs() {
     () => xii.state === "idle" && loadXII(),
     () => auditView === "senior" && auditViews.senior.state === "idle" && loadAudit(),
     () => hl.state === "idle" && loadHL(),
-    () => juniorScores.get().state === "idle" && juniorScores.load()
+    () => juniorScores.get().state === "idle" && juniorScores.load(),
+    () => { if (!milestonesLoaded) { milestonesLoaded = true; return refresh(); } },
+    () => recViews.senior.state === "idle" && loadRecords("senior"),
+    () => recViews.junior.state === "idle" && loadRecords("junior")
   ];
   for (const step of steps) { try { await step(); } catch (e) { /* a tab that fails shows its own error when opened */ } }
 }
