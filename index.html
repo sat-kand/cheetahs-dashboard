@@ -1227,7 +1227,9 @@ async function buildScores(api, now, kind) {
     if (!pool.length) return null;
     const anchor = forward ? pool.map(e => e.first).sort()[0] : pool.map(e => e.first).sort().pop();
     const week = mondayOf(anchor), weekEnd = addDays(week, 6);
-    const inWeek = forward ? pool.filter(e => e.first <= weekEnd) : pool.filter(e => e.last >= week);
+    /* A two-day game (U14) is dated by the day it started, so one still running in this week would otherwise fall outside it
+       and its team would be treated as having no game (a bye). A game that is in progress always belongs to the current week. */
+    const inWeek = forward ? pool.filter(e => e.first <= weekEnd) : pool.filter(e => e.last >= week || (e.row.outcome === "progress" && e.first >= addDays(week, -7)));
     const perTeam = new Map();
     for (const e of inWeek) {
       const cur = perTeam.get(e.teamId);
@@ -1248,6 +1250,7 @@ async function buildScores(api, now, kind) {
       if (have.has(tid)) continue;
       const mine = all.filter(e => e.teamId === tid);
       if (!(mine.some(e => e.last < week) && mine.some(e => e.first > weekEnd))) continue;
+      if (mine.some(e => e.row.outcome === "progress" && e.first >= addDays(week, -7))) continue; /* a game still running is not a bye */
       inferred.push({ teamId: tid, key: "", first: "", last: "",
         row: { id: "bye" + tid, grade: info.grade, rank: info.rank, outcome: "bye", us: [], them: { name: "", innings: [] } } });
     }
