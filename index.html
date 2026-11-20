@@ -245,7 +245,7 @@ td.num { font-weight: 700; color: var(--heading); }
 .st.progress { background: var(--gold); color: var(--brand); }
 @media (max-width: 860px) {
   .layout { grid-template-columns: minmax(0, 1fr); }
-  .side { position: static; order: -1; }
+  .side { position: static; }
 }
 @media (max-width: 520px) { .tab { padding: 8px 12px; font-size: 1rem; } .logo { height: 68px; } h1 { font-size: 1.8rem; } .big { font-size: 2.2rem; } }
 @media (prefers-reduced-motion: no-preference) { .seg button, .copy { transition: background 0.12s; } }
@@ -257,6 +257,7 @@ td.num { font-weight: 700; color: var(--heading); }
 h1 { font-size: 1.55rem; }
 .masthead .sub { font-size: 0.85rem; }
 .masthead .sub #status:not(:empty)::before { content: "· "; }
+@media (max-width: 520px) { .masthead .tagline { display: none; } .masthead .sub #status::before { content: ""; } }
 .hd-refresh { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 0.85rem; font-weight: 600;
   padding: 6px 14px; border-radius: 999px; border: 1px solid var(--gold); background: transparent; color: var(--gold); cursor: pointer; }
 .hd-refresh:hover { background: rgba(255, 199, 44, 0.12); }
@@ -343,7 +344,7 @@ h1 { font-size: 1.55rem; }
     <img class="logo" src="logo.png" width="96" height="97" alt="Parramatta Cheetahs Cricket Club crest">
     <div class="masthead-text">
       <h1>Parramatta Cheetahs</h1>
-      <p class="sub">Cricket club dashboard <span id="status"></span></p>
+      <p class="sub"><span class="tagline">Cricket club dashboard </span><span id="status"></span></p>
     </div>
     <button type="button" class="hd-refresh" id="hd-refresh" aria-label="Refresh this page's data"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Refresh</span></button>
   </div>
