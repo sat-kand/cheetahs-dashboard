@@ -254,10 +254,9 @@ td.num { font-weight: 700; color: var(--heading); }
 .masthead { border-bottom: 0; position: sticky; top: 0; z-index: 10; }
 .masthead-in { padding: 10px 16px; gap: 12px; }
 .logo { height: 46px; }
-h1 { font-size: 1.55rem; }
+h1 { font-size: 1.55rem; line-height: 1.1; }
 .masthead .sub { font-size: 0.85rem; }
-.masthead .sub #status:not(:empty)::before { content: "· "; }
-@media (max-width: 520px) { .masthead .tagline { display: none; } .masthead .sub #status::before { content: ""; } }
+
 .hd-refresh { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 0.85rem; font-weight: 600;
   padding: 6px 14px; border-radius: 999px; border: 1px solid var(--gold); background: transparent; color: var(--gold); cursor: pointer; }
 .hd-refresh:hover { background: rgba(255, 199, 44, 0.12); }
@@ -331,7 +330,7 @@ h1 { font-size: 1.55rem; }
 #panel-milestones .side h2 { font-size: 1.25rem; }
 #panel-milestones td.num { color: var(--heading); }
 @media (max-width: 520px) {
-  .logo { height: 38px; } h1 { font-size: 1.3rem; } .masthead .sub { font-size: 0.78rem; }
+  .logo { height: 38px; } h1 { font-size: 1.1rem; } .masthead .sub { font-size: 0.78rem; }
   .hd-refresh span { display: none; } .hd-refresh { padding: 7px; }
   .masthead .tab { padding: 9px 10px; font-size: 0.88rem; }
   #panel-hl [data-hl-view] { grid-template-columns: minmax(0, 1fr); }
@@ -343,8 +342,8 @@ h1 { font-size: 1.55rem; }
   <div class="masthead-in">
     <img class="logo" src="logo.png" width="96" height="97" alt="Parramatta Cheetahs Cricket Club crest">
     <div class="masthead-text">
-      <h1>Parramatta Cheetahs</h1>
-      <p class="sub"><span class="tagline">Cricket club dashboard </span><span id="status"></span></p>
+      <h1>Parramatta Cheetahs Cricket Club Dashboard</h1>
+      <p class="sub"><span id="status"></span></p>
     </div>
     <button type="button" class="hd-refresh" id="hd-refresh" aria-label="Refresh this page's data"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Refresh</span></button>
   </div>
