@@ -3247,6 +3247,8 @@ document.querySelectorAll("#seg-records button").forEach(b => b.addEventListener
 let milestonesLoaded = false;
 function showTab(name, updateHash) {
   for (const t of document.querySelectorAll(".tab")) t.setAttribute("aria-selected", String(t.dataset.tab === name));
+  const on = document.querySelector('.tab[data-tab="' + name + '"]'), bar = document.querySelector(".tabs");
+  if (on && bar) { const l = on.offsetLeft - bar.offsetLeft, r = l + on.offsetWidth; if (l < bar.scrollLeft || r > bar.scrollLeft + bar.clientWidth) bar.scrollLeft = l - 16; }
   for (const n of ["milestones", "xii", "hl", "audit", "scores", "jscores", "records"]) $("panel-" + n).hidden = name !== n;
   if (updateHash) history.replaceState(null, "", name === "xii" ? "#club-xii" : name === "hl" ? "#highlights" : name === "audit" ? "#audit" : name === "scores" ? "#scores" : name === "jscores" ? "#junior-scores" : name === "milestones" ? "#milestones" : name === "records" ? "#records" : location.pathname + location.search);
   if (name === "xii") { if (xii.state === "idle") return loadXII(); }
