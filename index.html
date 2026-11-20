@@ -2043,6 +2043,7 @@ function crossings(data, win, cfg) {
    season and team lists (12 hours). Career totals and the current seasons are fetched each visit.
    The Milestones and Records Refresh buttons call pcReset(), which drops all of it. */
 const PC_HTTP_CACHE = new Map();
+const PC_KEPT = new Set(); /* paths whose answer is kept between visits, so Refresh leaves them alone */
 const PC_STORE = "pc-v1";
 const DAY_MS = 24 * 3600 * 1000;
 async function pcStoreGet(path) {
@@ -2064,12 +2065,12 @@ function pcStorePut(path, text, ms) {
 async function getJSON(path, keep) {
   if (PC_HTTP_CACHE.has(path)) return PC_HTTP_CACHE.get(path);
   const p = (async () => {
-    if (keep) { const kept = await pcStoreGet(path); if (kept) return kept; }
+    if (keep) { const kept = await pcStoreGet(path); if (kept) { PC_KEPT.add(path); return kept; } }
     const r = await fetch(API_BASE + path);
     if (!r.ok) throw new Error("HTTP " + r.status);
     const t = await r.text();
     const j = t ? JSON.parse(t) : {};
-    if (keep) pcStorePut(path, t, keep(j));
+    if (keep) { const ms = keep(j); if (ms) PC_KEPT.add(path); pcStorePut(path, t, ms); }
     return j;
   })();
   PC_HTTP_CACHE.set(path, p);
@@ -2079,9 +2080,8 @@ async function getJSON(path, keep) {
 let PC_SHARED = null;
 function pcApi() { return PC_SHARED || (PC_SHARED = makeApi()); }
 function pcReset() {
-  PC_HTTP_CACHE.clear();
+  for (const k of [...PC_HTTP_CACHE.keys()]) if (!PC_KEPT.has(k)) PC_HTTP_CACHE.delete(k);
   PC_SHARED = null;
-  try { if (window.caches) caches.delete(PC_STORE); } catch (e) { /* nothing kept */ }
 }
 const PC_DONE = /^(COMPLETED|ABANDONED|CANCELLED)/;
 const keepFor = ms => () => ms;
@@ -2182,7 +2182,7 @@ function phqClearCache() { PHQ_HTTP_CACHE.clear(); }
    - in the browser's Cache Storage between visits, for data that rarely or never changes: season and team lists
      (12 hours) and the summaries of finished games (12 hours). Fixtures and unfinished games are never kept between
      visits, so scores in progress are always current.
-   A tab's Refresh button calls phqReset(), which drops both, so a corrected scorecard shows straight away. */
+   Refresh calls phqReset(), which drops only what can still change and keeps the rest. */
 const PHQ_STORE = "phq-v1";
 const PHQ_KEEP_MS = 12 * 3600 * 1000;
 const phqStorable = path => /\/(seasons|teams|grades)$/.test(path) || /\/games\/[^/]+\/summary$/.test(path) || /^\/v1\/teams\/[^/?]+\/fixture/.test(path);
@@ -2204,8 +2204,10 @@ async function phqStoreGet(path) {
     return await r.json();
   } catch (e) { return null; }
 }
+const PHQ_KEPT = new Set(); /* paths whose answer is final, so Refresh leaves them alone */
 function phqStorePut(path, text, j) {
   try {
+    if (phqStorable(path) && phqFinished(path, j)) PHQ_KEPT.add(path);
     if (!phqStorable(path) || !window.caches || !phqFinished(path, j)) return;
     caches.open(PHQ_STORE).then(c => c.put(PHQ_PROXY_BASE + path, new Response(text, { headers: { "Content-Type": "application/json", "x-saved": String(Date.now()) } }))).catch(() => {});
   } catch (e) { /* storage unavailable: memory only */ }
@@ -2214,7 +2216,7 @@ async function phqJSON(path, opts) {
   const fresh = opts && opts.fresh;
   if (!fresh && PHQ_HTTP_CACHE.has(path)) return PHQ_HTTP_CACHE.get(path);
   const p = (async () => {
-    if (!fresh) { const kept = await phqStoreGet(path); if (kept) return kept; }
+    if (!fresh) { const kept = await phqStoreGet(path); if (kept) { if (phqFinished(path, kept)) PHQ_KEPT.add(path); return kept; } }
     const r = await fetch(PHQ_PROXY_BASE + path);
     if (!r.ok) throw new Error("HTTP " + r.status);
     const t = await r.text();
@@ -2230,10 +2232,11 @@ async function phqJSON(path, opts) {
 /* One PlayHQ connection shared by every tab, so what one tab has worked out (rosters, rounds) the others reuse. */
 let PHQ_SHARED = null;
 function phq() { return PHQ_SHARED || (PHQ_SHARED = makePhqApi()); }
+/* Refresh drops what can still change (fixtures with games to come, unfinished games) and keeps what is final
+   (season and team lists, finished games, past seasons' fixtures), so it re-reads only a few things. */
 function phqReset() {
-  PHQ_HTTP_CACHE.clear();
+  for (const k of [...PHQ_HTTP_CACHE.keys()]) if (!PHQ_KEPT.has(k)) PHQ_HTTP_CACHE.delete(k);
   PHQ_SHARED = null;
-  try { if (window.caches) caches.delete(PHQ_STORE); } catch (e) { /* nothing kept */ }
 }
 /* Every club team of the given seasons, fetched for all seasons at once. */
 async function seasonTeams(api, seasons, filter) {
