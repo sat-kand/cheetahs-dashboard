@@ -3287,8 +3287,20 @@ document.querySelector(".tabs").addEventListener("keydown", e => {
 (() => {
   const hb = $("hd-refresh");
   const target = () => { const p = [...document.querySelectorAll(".panel")].find(x => !x.hidden); return p && p.querySelector(".refresh"); };
-  hb.addEventListener("click", () => { const t = target(); if (t && !t.disabled) t.click(); });
-  const sync = () => { const t = target(); hb.classList.toggle("busy", !!(t && t.disabled)); };
+  let pending = null; /* the tab button the header press started, until that tab finishes loading */
+  hb.addEventListener("click", () => {
+    const t = target();
+    if (!t || t.disabled) return;
+    pending = t; setStatus("loading"); hb.classList.add("busy");
+    t.click();
+    if (!t.disabled) { pending = null; asOf = new Date().toISOString(); setStatus("live"); hb.classList.remove("busy"); } /* nothing to wait for */
+  });
+  const sync = () => {
+    const t = target();
+    hb.classList.toggle("busy", !!(t && t.disabled));
+    /* the load that the header press started has finished: show the new time, whichever tab it was */
+    if (pending && !pending.disabled) { pending = null; asOf = new Date().toISOString(); setStatus("live"); }
+  };
   const mo = new MutationObserver(sync);
   document.querySelectorAll(".panel .refresh").forEach(b => mo.observe(b, { attributes: true, attributeFilter: ["disabled"] }));
   document.querySelectorAll(".panel").forEach(p => mo.observe(p, { attributes: true, attributeFilter: ["hidden"] }));
