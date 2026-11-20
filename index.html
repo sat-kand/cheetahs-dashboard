@@ -271,7 +271,7 @@ h1 { font-size: 1.55rem; }
 .masthead .tab:hover { color: #fff; }
 .masthead .tab[aria-selected="true"] { color: #fff; border-bottom-color: var(--gold); }
 .masthead .tab:focus-visible { outline-color: var(--gold); outline-offset: -3px; }
-.panel .toolbar .refresh { display: none; }
+.panel .refresh { display: none; }
 .toolbar .actions { margin-left: auto; }
 .wrap { padding-top: 20px; }
 /* list panels (Club XII, Highlights) */
@@ -417,18 +417,23 @@ h1 { font-size: 1.55rem; }
       <div class="actions"><button type="button" class="refresh" id="h-refresh">Refresh</button><button type="button" class="copy" id="h-copy">Copy list</button></div>
     </div>
     <div data-hl-view="senior">
-    <section class="block" aria-labelledby="h-hl">
-      <h2 id="h-hl">Senior 50 to 99 scores of the round</h2>
-      <div class="summary" id="h-summary">Loading the most recently played round…</div>
-      <div class="grid xii-grid" id="h-grid"></div>
-    </section>
     <section class="block" aria-labelledby="h-hl100">
       <h2 id="h-hl100">Senior centuries of the round</h2>
       <div class="summary" id="h100-summary">Loading the most recently played round…</div>
       <div class="grid xii-grid" id="h100-grid"></div>
     </section>
+    <section class="block" aria-labelledby="h-hl">
+      <h2 id="h-hl">Senior 50's Club of the round</h2>
+      <div class="summary" id="h-summary">Loading the most recently played round…</div>
+      <div class="grid xii-grid" id="h-grid"></div>
+    </section>
+    <section class="block" aria-labelledby="h-hlw5">
+      <h2 id="h-hlw5">Senior 5+ wickets of the round</h2>
+      <div class="summary" id="hw5-summary">Loading the most recently played round…</div>
+      <div class="grid xii-grid" id="hw5-grid"></div>
+    </section>
     <section class="block" aria-labelledby="h-hlw">
-      <h2 id="h-hlw">Senior 4+ wickets of the round</h2>
+      <h2 id="h-hlw">Senior 4 wickets of the round</h2>
       <div class="summary" id="hw-summary">Loading the most recently played round…</div>
       <div class="grid xii-grid" id="hw-grid"></div>
     </section>
@@ -479,7 +484,7 @@ h1 { font-size: 1.55rem; }
       </div>
       <div class="hon-grid" id="hon-grid"></div>
     </section>
-    <div class="toolbar">
+    <div class="toolbar" hidden>
       <div class="actions"><button type="button" class="refresh" id="rec-refresh">Refresh</button></div>
     </div>
     <section class="block" aria-labelledby="h-records">
@@ -2780,8 +2785,8 @@ const HL_BAT = { key: "list", value: "runs", fig: hlScore, what: n => plural(n, 
 const HL_BOWL = { key: "wkts", value: "wkts", fig: hlFigures, what: n => plural(n, "haul", "hauls"), unit: "wickets",
   none: (min, max) => "Nobody took " + hlRangeLong(min, max) + " wickets." };
 function hlWhere(p) { return shortGrade(p.grade) + (p.innings ? ", innings " + p.innings : ""); }
-function hlRangeShort(min, max) { return max != null ? min + " to " + max : min + "+"; }
-function hlRangeLong(min, max) { return max != null ? min + " to " + max : min + " or more"; }
+function hlRangeShort(min, max) { return max === min ? String(min) : max != null ? min + " to " + max : min + "+"; }
+function hlRangeLong(min, max) { return max === min ? String(min) : max != null ? min + " to " + max : min + " or more"; }
 /* One section: s = { sum, grid, min, max, data, where, loading, kind (HL_BAT or HL_BOWL) } */
 function renderHLSection(s) {
   const sum = $(s.sum), grid = $(s.grid);
@@ -2801,12 +2806,12 @@ function renderHLSection(s) {
   const K = s.kind;
   const items = (d[K.key] || []).filter(p => p[K.value] >= s.min && (s.max == null || p[K.value] <= s.max));
   const short = hlRangeShort(s.min, s.max), long = hlRangeLong(s.min, s.max);
-  sum.innerHTML = s.where(d) + K.what(items.length) + " of " + long + ".";
+  sum.innerHTML = s.where(d) + K.what(items.length) + " of " + long + (K === HL_BOWL ? " wickets" : "") + ".";
   if (items.some(p => p.live)) sum.innerHTML += '<span class="bad">Figures marked "Not finished" are from matches still in progress and may change.</span>';
   if (hl.state === "error") sum.innerHTML += '<span class="bad">Could not refresh, so this is from ' + fmtDate(hl.at) + ". Press Refresh to try again.</span>";
   if (d.failedTeams > 0) sum.innerHTML += '<span class="bad">Could not read the fixtures for ' + plural(d.failedTeams, "team", "teams") + ", so some may be missing. Press Refresh to try again.</span>";
   if (d.failed > 0) sum.innerHTML += '<span class="bad">Could not check ' + plural(d.failed, "player", "players") + ", so they may be missing. Press Refresh to try again.</span>";
-  const label = short + " " + K.unit;
+  const label = s.title || short + " " + K.unit;
   const box = document.createElement("section");
   box.className = "lst";
   box.setAttribute("aria-label", label);
@@ -2825,9 +2830,10 @@ function renderHL() {
   const sw = x => "<strong>" + x.round.name + "</strong> (" + xiiRounds(x.round) + ", " + x.round.season + "), " + plural(x.round.matches, "senior match", "senior matches") + ": ";
   const jw = x => "<strong>Latest junior matches</strong> (" + hlJuniorDates(x.round) + ", " + x.round.season + "), " + plural(x.round.teams, "team", "teams") + ": ";
   const sl = "Loading the most recently played round…", jl = "Loading each junior team's latest match…";
-  renderHLSection({ sum: "h-summary", grid: "h-grid", min: HL_MIN_RUNS, max: 99, data: d.senior, loading: sl, where: sw, kind: HL_BAT });
-  renderHLSection({ sum: "h100-summary", grid: "h100-grid", min: 100, data: d.senior, loading: sl, where: sw, kind: HL_BAT });
-  renderHLSection({ sum: "hw-summary", grid: "hw-grid", min: HL_MIN_WKTS, data: d.senior, loading: sl, where: sw, kind: HL_BOWL });
+  renderHLSection({ sum: "h100-summary", grid: "h100-grid", min: 100, data: d.senior, loading: sl, where: sw, kind: HL_BAT, title: "Centuries" });
+  renderHLSection({ sum: "h-summary", grid: "h-grid", min: HL_MIN_RUNS, max: 99, data: d.senior, loading: sl, where: sw, kind: HL_BAT, title: "50's Club" });
+  renderHLSection({ sum: "hw5-summary", grid: "hw5-grid", min: 5, data: d.senior, loading: sl, where: sw, kind: HL_BOWL, title: "5+ wickets" });
+  renderHLSection({ sum: "hw-summary", grid: "hw-grid", min: HL_MIN_WKTS, max: HL_MIN_WKTS, data: d.senior, loading: sl, where: sw, kind: HL_BOWL, title: "4 wickets" });
   renderHLSection({ sum: "hj-summary", grid: "hj-grid", min: HL_JUNIOR_MIN_RUNS, data: d.junior, loading: jl, where: jw, kind: HL_BAT });
   renderHLSection({ sum: "hwj-summary", grid: "hwj-grid", min: HL_JUNIOR_MIN_WKTS, data: d.junior, loading: jl, where: jw, kind: HL_BOWL });
 }
@@ -2849,9 +2855,10 @@ function hlText(view) {
     add("Parramatta Cheetahs junior " + HL_JUNIOR_MIN_RUNS + "+ scores" + jt, d.junior, HL_JUNIOR_MIN_RUNS, null, HL_BAT);
     add("Parramatta Cheetahs junior " + HL_JUNIOR_MIN_WKTS + "+ wickets" + jt, d.junior, HL_JUNIOR_MIN_WKTS, null, HL_BOWL);
   } else {
-    add("Parramatta Cheetahs senior 50 to 99 scores" + st, d.senior, HL_MIN_RUNS, 99, HL_BAT);
     add("Parramatta Cheetahs senior centuries" + st, d.senior, 100, null, HL_BAT);
-    add("Parramatta Cheetahs senior " + HL_MIN_WKTS + "+ wickets" + st, d.senior, HL_MIN_WKTS, null, HL_BOWL);
+    add("Parramatta Cheetahs senior 50's Club" + st, d.senior, HL_MIN_RUNS, 99, HL_BAT);
+    add("Parramatta Cheetahs senior 5+ wickets" + st, d.senior, 5, null, HL_BOWL);
+    add("Parramatta Cheetahs senior 4 wickets" + st, d.senior, HL_MIN_WKTS, HL_MIN_WKTS, HL_BOWL);
   }
   return out.join("\n").trim();
 }
@@ -3034,7 +3041,6 @@ function scoresTab(prefix, kind, word) {
       return;
     }
     title.textContent = d.round.name + " · " + xiiRounds(d.round);
-    const small = document.createElement("small"); small.textContent = "Updated " + fmtDate(state.at); title.appendChild(small);
     if (state.state === "error") note.textContent = "Could not refresh. Press Refresh to try again.";
     else if (d.failedTeams) note.textContent = "Could not read " + plural(d.failedTeams, "team", "teams") + ", so some matches may be missing. Press Refresh to try again.";
     list.hidden = !d.rows.length;
