@@ -429,7 +429,7 @@ h1 { font-size: 1.55rem; line-height: 1.1; }
 
   <div class="panel" id="panel-xii" role="tabpanel" aria-labelledby="tab-xii" hidden>
     <div class="toolbar">
-      <div class="actions"><button type="button" class="refresh" id="x-refresh">Refresh</button><button type="button" class="copy" id="x-copy">Copy XII</button></div>
+      <div class="actions"><button type="button" class="refresh" id="x-refresh">Refresh</button><button type="button" class="copy" id="x-copy">Copy XII</button><button type="button" class="copy" id="x-img">Download image</button></div>
     </div>
     <section class="block" aria-labelledby="h-xii">
       <h2 id="h-xii">Senior Club XII of the round</h2>
@@ -2777,6 +2777,112 @@ async function loadXII() {
   }
 }
 $("x-refresh").addEventListener("click", () => { phqReset(); loadXII(); });
+/* ---- Club XII social image: the club's own template (xii-template.jpg, the round-4 post with its text cleared),
+   with this round's names and figures drawn on. The template and the italic font are fetched only when the button
+   is pressed, so page loads are unaffected. Positions are in the template's 1254 x 1254 pixels. */
+const XII_IMG = { size: 1254, rowTop: i => 356 + 128.4 * i, cols: [
+  { gradeCx: 118, gradeW: 104, nameX: 200, nameW: 238, figR: 592 },
+  { gradeCx: 700, gradeW: 104, nameX: 778, nameW: 234, figR: 1194 }] };
+let XII_FONT = null;
+function xiiFont() {
+  if (!XII_FONT) XII_FONT = (async () => {
+    const l = document.createElement("link");
+    l.rel = "stylesheet";
+    l.href = "https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,700;1,800&display=block";
+    document.head.appendChild(l);
+    await new Promise(r => { l.onload = r; l.onerror = r; });
+    await Promise.all(['italic 800 50px "Barlow Condensed"', '700 40px "Barlow Condensed"'].map(f => document.fonts.load(f).catch(() => {})));
+  })();
+  return XII_FONT;
+}
+function xiiTemplate() {
+  return new Promise((ok, bad) => { const im = new Image(); im.onload = () => ok(im); im.onerror = bad; im.src = "xii-template.jpg"; });
+}
+/* the largest size (down to min) at which text fits width w */
+function fitSize(ctx, font, text, w, max, min) {
+  for (let px = max; px > min; px--) { ctx.font = font(px); if (ctx.measureText(text).width <= w) return px; }
+  ctx.font = font(min); return min;
+}
+async function xiiImage() {
+  const d = xii.data;
+  if (!d || !d.round) throw new Error("No Club XII to draw yet.");
+  const [tpl] = await Promise.all([xiiTemplate(), xiiFont()]);
+  const S = XII_IMG.size, cv = document.createElement("canvas");
+  cv.width = S; cv.height = S;
+  const ctx = cv.getContext("2d");
+  ctx.drawImage(tpl, 0, 0, S, S);
+  const ITAL = px => 'italic 800 ' + px + 'px "Barlow Condensed", "Arial Narrow", Arial, sans-serif';
+  const BOLD = px => '700 ' + px + 'px "Barlow Condensed", "Arial Narrow", Arial, sans-serif';
+  const INK = "#482600", WHITE = "#ffffff";
+  /* round number in the white brush stroke */
+  const no = (String(d.round.name).match(/\d+/) || [""])[0];
+  ctx.fillStyle = "#3f1f02"; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+  ctx.font = ITAL(fitSize(ctx, ITAL, no, 52, 80, 40)); ctx.fillText(no, 770, 238);
+  const x = d.xii, capId = x.captain && x.captain.id;
+  const rows = [
+    ...x.batters.slice(0, XII_BATTERS).map((p, i) => ({ col: 0, i, kind: "bat", p })),
+    ...(x.keeper ? [{ col: 1, i: 0, kind: "keep", p: x.keeper }] : []),
+    ...x.bowlers.slice(0, XII_BOWLERS).map((p, i) => ({ col: 1, i: i + 1, kind: "bowl", p }))
+  ];
+  for (const r of rows) {
+    const c = XII_IMG.cols[r.col], cy = XII_IMG.rowTop(r.i) + 57, p = r.p;
+    /* grade: one line, or two short lines ("B13" over "Brown") when it won't fit */
+    const g = gradeFor(r.kind, p);
+    ctx.fillStyle = WHITE; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    const sp = g.indexOf(" ");
+    ctx.font = ITAL(48);
+    if (ctx.measureText(g).width <= c.gradeW || sp < 0 || sp <= 1) {
+      ctx.font = ITAL(fitSize(ctx, ITAL, g, c.gradeW, 52, 24)); ctx.fillText(g, c.gradeCx, cy + 2);
+    } else {
+      const a = g.slice(0, sp), b = g.slice(sp + 1);
+      const px = Math.min(fitSize(ctx, ITAL, a, c.gradeW, 36, 20), fitSize(ctx, ITAL, b, c.gradeW, 36, 20));
+      ctx.font = ITAL(px); ctx.fillText(a, c.gradeCx, cy - px * 0.42); ctx.fillText(b, c.gradeCx, cy + px * 0.5);
+    }
+    /* name, wrapped onto two lines when long */
+    const name = p.name + (capId && capId === p.id ? " (C)" : "");
+    ctx.fillStyle = INK; ctx.textAlign = "left";
+    ctx.font = BOLD(40);
+    if (ctx.measureText(name).width <= c.nameW) ctx.fillText(name, c.nameX, cy + 2);
+    else {
+      const w = name.split(" ");
+      let best = null;
+      for (let k = 1; k < w.length; k++) {
+        const a = w.slice(0, k).join(" "), b = w.slice(k).join(" ");
+        const px = Math.min(fitSize(ctx, BOLD, a, c.nameW, 38, 24), fitSize(ctx, BOLD, b, c.nameW, 38, 24));
+        if (!best || px > best.px) best = { a, b, px };
+      }
+      if (best) { ctx.font = BOLD(best.px); ctx.fillText(best.a, c.nameX, cy - best.px * 0.45); ctx.fillText(best.b, c.nameX, cy + best.px * 0.55); }
+      else { ctx.font = BOLD(fitSize(ctx, BOLD, name, c.nameW, 40, 20)); ctx.fillText(name, c.nameX, cy + 2); }
+    }
+    /* figure, right-aligned in the dark block after the icon */
+    ctx.fillStyle = WHITE; ctx.textAlign = "right";
+    if (r.kind === "keep") {
+      const n = (p.kc || 0) + (p.st || 0), what = p.st && p.kc ? "(Dismissals)" : p.st ? (p.st === 1 ? "(Stumping)" : "(Stumpings)") : (n === 1 ? "(Catch)" : "(Catches)");
+      ctx.font = ITAL(24); const ww = ctx.measureText(what).width; ctx.fillText(what, c.figR, cy + 4);
+      ctx.font = ITAL(48); ctx.fillText(String(n), c.figR - ww - 8, cy + 4);
+    } else {
+      const f = r.kind === "bat" ? p.runs + (p.notOut ? "*" : "") : p.wkts + "/" + p.conc;
+      ctx.font = ITAL(fitSize(ctx, ITAL, f, 104, 56, 30)); ctx.fillText(f, c.figR, cy + 4);
+    }
+  }
+  return new Promise((ok, bad) => cv.toBlob(b => b ? ok(b) : bad(new Error("Could not make the image.")), "image/png"));
+}
+$("x-img").addEventListener("click", async e => {
+  const btn = e.currentTarget, label = btn.textContent;
+  btn.disabled = true; btn.textContent = "Making image…";
+  try {
+    const blob = await xiiImage();
+    const name = "cheetahs-club-xii-" + String(xii.data.round.name).toLowerCase().replace(/[^a-z0-9]+/g, "-") + ".png";
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+    btn.textContent = "Downloaded";
+  } catch (err) {
+    btn.textContent = "Could not make image";
+  }
+  setTimeout(() => { btn.textContent = label; btn.disabled = false; }, 1600);
+});
 $("x-copy").addEventListener("click", async e => {
   const btn = e.currentTarget;
   try { await navigator.clipboard.writeText(xiiText()); btn.textContent = "Copied"; }
@@ -3077,7 +3183,7 @@ function scoresTab(prefix, kind, word) {
       }
       row.appendChild(l1);
       const l2 = document.createElement("div"); l2.className = "l2";
-      if (kind === "junior" && r.outcome === "upcoming" && r.time) {
+      if (kind === "junior" && (r.outcome === "upcoming" || r.outcome === "pending") && r.time) {
         const tm = document.createElement("span"); tm.className = "venue time";
         tm.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm.5-13H11v6l5.2 3.2.8-1.3-4.5-2.7V7z"/></svg>';
         const tn = document.createElement("span"); tn.textContent = fmtTime12(r.time);
