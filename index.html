@@ -896,7 +896,8 @@ function noFigures(sc) {
     (i.batting || []).some(b => Number(b.runsScored) > 0 || Number(b.ballsFaced) > 0) || Number(i.runsScored) > 0);
 }
 function pcFallbackCard(e, phqSc) {
-  if (!PC_FALLBACK.has(e.matchId)) PC_FALLBACK.set(e.matchId, (async () => {
+  const key = e.matchId + "|" + e.teamId; /* two of our teams can meet in one game, so the team is part of the key */
+  if (!PC_FALLBACK.has(key)) PC_FALLBACK.set(key, (async () => {
     const api = pcApi();
     const norm = x => String(x || "").replace(/^juniors?\s+/i, "").replace(/\s*\([^)]*\)/g, "").replace(/\s+/g, " ").trim().toLowerCase();
     const want = norm(e.label);
@@ -921,8 +922,8 @@ function pcFallbackCard(e, phqSc) {
       return { teamId: t.id, ours: roster, sc: { ...sc, gameType: (phqSc && phqSc.gameType) || sc.gameType || "", teams: [{ id: t.id, name: t.name, displayName: t.name, players: roster }, ...others] } };
     }
     return null;
-  })().catch(() => { PC_FALLBACK.delete(e.matchId); return null; }));
-  return PC_FALLBACK.get(e.matchId);
+  })().catch(() => { PC_FALLBACK.delete(key); return null; }));
+  return PC_FALLBACK.get(key);
 }
 async function buildJuniorHighlights(api, now) {
   const { picked, failedTeams } = await latestJuniorMatches(api, now);
