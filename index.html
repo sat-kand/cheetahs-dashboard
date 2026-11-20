@@ -912,6 +912,11 @@ function pcFallbackCard(e, phqSc) {
       const detail = await api.getMatch(m.id);
       const ourSide = (detail.Teams || detail.teams || []).find(x => (x.Id || x.id) === t.id);
       const roster = ((ourSide && (ourSide.Players || ourSide.players)) || []).map(p => ({ participantId: p.ParticipantId, name: tidyName(p.Name), roles: p.Roles || [] }));
+      /* the junior rules read PlayHQ's fields: whether a listed batter actually batted, and the batting / bowling order */
+      for (const inn of sc.innings) {
+        for (const b of (inn.batting || [])) { b.didBat = Number(b.ballsFaced) > 0 || Number(b.runsScored) > 0 || (!!b.dismissalType && !/did\s*not\s*bat|^absent/i.test(b.dismissalType)); b.order = Number(b.order) || Number(b.batOrder) || 0; }
+        for (const b of (inn.bowling || [])) b.order = Number(b.order) || Number(b.bowlOrder) || 0;
+      }
       const others = (sc.teams || []).filter(x => x.id !== t.id);
       return { teamId: t.id, ours: roster, sc: { ...sc, gameType: (phqSc && phqSc.gameType) || sc.gameType || "", teams: [{ id: t.id, name: t.name, displayName: t.name, players: roster }, ...others] } };
     }
