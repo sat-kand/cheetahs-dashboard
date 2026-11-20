@@ -990,19 +990,35 @@ function noFigures(sc) {
   return !sc.innings.some(i => (i.bowling || []).some(b => overBalls(b.oversBowled) > 0 || Number(b.wicketsTaken) > 0) ||
     (i.batting || []).some(b => Number(b.runsScored) > 0 || Number(b.ballsFaced) > 0) || Number(i.runsScored) > 0);
 }
+/* The Play Cricket match for one of our teams on a given start date, found by the team's name: [{ team, match }] candidates.
+   Uses only the season, team and fixture lists, which are kept between visits, so it costs no request once they're loaded. */
+const PC_MATCH_FIND = new Map();
+function pcFindMatches(label, first) {
+  const key = label + "|" + first;
+  if (!PC_MATCH_FIND.has(key)) PC_MATCH_FIND.set(key, (async () => {
+    const api = pcApi();
+    const norm = (x, keepBr) => String(x || "").replace(/^(juniors?|seniors?)\s+/i, "").replace(/\s*\(([^)]*)\)/g, keepBr ? " $1" : "").replace(/\s+/g, " ").trim().toLowerCase();
+    const seasons = newestSeasons(await api.getSeasons(), new Date(), 2);
+    const all = [];
+    for (const s of seasons) all.push(...await api.getTeams(s.id));
+    /* the name with what's in brackets (coach or B13 colour) first, then without it */
+    let teams = all.filter(t => norm(t.name, true) === norm(label, true));
+    if (!teams.length) teams = all.filter(t => norm(t.name) === norm(label));
+    const out = [];
+    for (const t of teams) {
+      const list = await api.getTeamMatches(t.id);
+      const m = list.find(x => (x.matchSchedule || []).map(y => parseDate(y.startDateTime)).filter(d => !isNaN(d)).map(ymdSydney).sort()[0] === first);
+      if (m) out.push({ team: t, match: m });
+    }
+    return out;
+  })().catch(() => { PC_MATCH_FIND.delete(key); return []; }));
+  return PC_MATCH_FIND.get(key);
+}
 function pcFallbackCard(e, phqSc) {
   const key = e.matchId + "|" + e.teamId; /* two of our teams can meet in one game, so the team is part of the key */
   if (!PC_FALLBACK.has(key)) PC_FALLBACK.set(key, (async () => {
     const api = pcApi();
-    const norm = x => String(x || "").replace(/^juniors?\s+/i, "").replace(/\s*\([^)]*\)/g, "").replace(/\s+/g, " ").trim().toLowerCase();
-    const want = norm(e.label);
-    const seasons = newestSeasons(await api.getSeasons(), new Date(), 2);
-    const teams = [];
-    for (const s of seasons) for (const t of await api.getTeams(s.id)) if (norm(t.name) === want) teams.push(t);
-    for (const t of teams) {
-      const list = await api.getTeamMatches(t.id);
-      const m = list.find(x => (x.matchSchedule || []).map(y => parseDate(y.startDateTime)).filter(d => !isNaN(d)).map(ymdSydney).sort()[0] === e.first);
-      if (!m) continue;
+    for (const { team: t, match: m } of await pcFindMatches(e.label, e.first)) {
       const sc = await api.getScorecard(m.id);
       if (!sc || !Array.isArray(sc.innings) || noFigures(sc)) continue;
       const detail = await api.getMatch(m.id);
@@ -1519,7 +1535,7 @@ async function buildScores(api, now, kind) {
       const venue = (m.venue && (m.venue.name || (m.venue.playingSurface && m.venue.playingSurface.name))) || "";
       /* a match between two of our teams gets a row for each of them */
       all.push({ ...base, first: days[0], last: days[days.length - 1],
-        row: { id: m.id, venue: String(venue).trim(), time: m.startTime || "", grade, rank, outcome, usId: us && us.id, themId: them && them.id,
+        row: { id: m.id, first: days[0], venue: String(venue).trim(), time: m.startTime || "", grade, rank, outcome, usId: us && us.id, themId: them && them.id,
           us: inningsFromText(us), them: { name: "", club, display: them && them.displayName, innings: inningsFromText(them) } } });
     }
   });
@@ -1634,6 +1650,27 @@ async function buildScores(api, now, kind) {
       } catch (e) { /* keep the fixture figures */ }
     });
   }
+  /* A game that has started but has no score on PlayHQ (not yet entered there, or scored only on Play Cricket) is read
+     from Play Cricket: its match is found from the kept fixture lists, and only that game's scorecard is fetched (fresh
+     while it can still change). Games that already show a score cost nothing extra. */
+  const blank = rows.filter(r => r.usId && r.first && r.first <= today && ["progress", "pending", "finished"].includes(r.outcome)
+    && !r.us.length && !(r.them.innings || []).length);
+  await mapLimit(blank, 4, async r => {
+    try {
+      const pa = pcApi();
+      for (const { team, match } of await pcFindMatches(r.grade, r.first)) {
+        const sc = r.outcome === "finished" ? await pa.getScorecard(match.id) : await pa.getScorecardFresh(match.id);
+        if (!sc || !Array.isArray(sc.innings)) continue;
+        const us = inningsFromScorecard(sc, team.id);
+        const themId = (sc.innings.find(i => i.battingTeamId && i.battingTeamId !== team.id) || {}).battingTeamId;
+        const them = themId ? inningsFromScorecard(sc, themId) : [];
+        if (!us.length && !them.length) continue;
+        r.us = us; r.them.innings = them;
+        if (r.outcome === "pending") r.outcome = "progress";
+        return;
+      }
+    } catch (e) { /* leave it as PlayHQ has it */ }
+  });
   /* An upcoming game whose team sheet for our side has no players yet gets flagged. A lookup that fails is left unflagged
      rather than guessed at. */
   if (api.getScorecard) {
