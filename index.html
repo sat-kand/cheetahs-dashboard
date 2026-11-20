@@ -300,6 +300,35 @@ h1 { font-size: 1.55rem; }
 .lst-group { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); background: var(--hover); padding: 4px 12px; border-top: 1px solid var(--line); }
 .lst-h + .lst-group { border-top: 0; }
 #panel-xii .lst { max-width: 720px; }
+
+/* scores pages and milestones in the same list style */
+.scores-head { align-items: flex-start; }
+.scores-title { color: var(--ink); font-size: 1.1rem; }
+.scores-title small { display: none; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.chip { font-size: 0.75rem; font-weight: 700; padding: 1px 9px; border-radius: 999px; background: var(--pill-bg); color: var(--pill-ink); }
+.chip.won { background: #1f7a3d; color: #fff; } .chip.lost { background: #b3261e; color: #fff; }
+.scores { border-top: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.srow { padding: 9px 12px; gap: 3px; }
+.srow .g { font-family: var(--font-body); font-size: 0.72rem; font-weight: 700; background: var(--gold); color: var(--brand); border-radius: 4px; padding: 1px 6px; align-self: center; }
+.srow .tm .g + .sc, .srow .tm .g + span { margin-left: 0; }
+.srow .sc { color: var(--ink); }
+.srow .l1 { gap: 2px 8px; }
+.st { font-size: 0.7rem; }
+.srow .time { color: var(--ink); font-weight: 600; }
+#panel-milestones .toolbar .actions { margin-left: auto; }
+#panel-milestones .summary { background: none; border: 0; padding: 0; font-size: 0.88rem; color: var(--muted); text-wrap: pretty; }
+#panel-milestones .summary strong { color: var(--ink); }
+#panel-milestones .block { gap: 8px; }
+#panel-milestones h2, #panel-milestones h3 { font-size: 1.25rem; }
+#panel-milestones h2::after { display: none; }
+#panel-milestones .grid { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; align-items: start; }
+#panel-milestones .watch { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 0; gap: 0; overflow: hidden; }
+#panel-milestones .watch h3 { background: var(--brand); color: #fff; font-family: var(--font-body); font-size: 0.9rem; font-weight: 600; letter-spacing: 0; text-transform: none; padding: 7px 12px; }
+#panel-milestones .watch .cap { padding: 6px 12px 0; }
+#panel-milestones .watch > div { padding: 4px 12px 8px; }
+#panel-milestones .side h2 { font-size: 1.25rem; }
+#panel-milestones td.num { color: var(--heading); }
 @media (max-width: 520px) {
   .logo { height: 38px; } h1 { font-size: 1.3rem; } .masthead .sub { font-size: 0.78rem; }
   .hd-refresh span { display: none; } .hd-refresh { padding: 7px; }
@@ -2514,34 +2543,13 @@ function renderSection(sec) {
   for (const M of cfg.ms) {
     const items = list.filter(r => r.M === M);
     if (!items.length && !sec.showEmpty) continue;
-    const card = document.createElement("section");
-    card.className = "card";
-    card.setAttribute("aria-label", cfg.verb.charAt(0).toUpperCase() + cfg.verb.slice(1) + " " + fmtNum(M) + " " + cfg.units);
-    const head = document.createElement("div");
-    head.className = "card-head";
-    head.innerHTML = '<span class="big">' + fmtNum(M) + '</span><span class="label">' + items.length + (items.length === 1 ? " player" : " players") + "</span>";
-    card.appendChild(head);
-    if (!items.length) {
-      const p = document.createElement("p");
-      p.className = "empty";
-      p.textContent = "Nobody " + cfg.verb + " " + fmtNum(M) + ".";
-      card.appendChild(p);
-    } else {
-      const ul = document.createElement("ul");
-      for (const r of items) {
-        const li = document.createElement("li");
-        const nm = document.createElement("span"); nm.className = "name"; nm.textContent = r.name;
-        const meta = document.createElement("span"); meta.className = "meta";
-        const tot = document.createElement("span"); tot.textContent = fmtNum(r.before) + " to " + fmtNum(r.now) + " " + cfg.units;
-        const pill = document.createElement("span"); pill.className = "pill now";
-        pill.textContent = "+" + fmtNum(r.took) + " " + (r.took === 1 ? cfg.unit : cfg.units);
-        meta.append(tot, pill);
-        li.append(nm, meta);
-        ul.appendChild(li);
-      }
-      card.appendChild(ul);
-    }
-    grid.appendChild(card);
+    const box = document.createElement("section");
+    box.className = "lst";
+    box.setAttribute("aria-label", cfg.verb.charAt(0).toUpperCase() + cfg.verb.slice(1) + " " + fmtNum(M) + " " + cfg.units);
+    box.innerHTML = '<div class="lst-h">' + fmtNum(M) + " " + esc(cfg.units) + '<span class="n">' + items.length + "</span></div>";
+    if (!items.length) box.appendChild(listRow({ cls: "empty-row", text: "Nobody " + cfg.verb + " " + fmtNum(M) + "." }));
+    for (const r of items) box.appendChild(listRow({ name: r.name, sub: fmtNum(r.before) + " to " + fmtNum(r.now) + " " + cfg.units, fig: "+" + fmtNum(r.took) }));
+    grid.appendChild(box);
   }
 }
 
@@ -3041,6 +3049,9 @@ function scoresTab(prefix, kind, word) {
       return;
     }
     title.textContent = d.round.name + " · " + xiiRounds(d.round);
+    const tally = k => d.rows.filter(r => r.outcome === k).length;
+    const chips = [["won", tally("won") + " won"], ["lost", tally("lost") + " lost"], ["", (tally("upcoming") + tally("pending")) + " next"], ["", tally("bye") + " bye"]].filter(c => !/^0 /.test(c[1]));
+    if (chips.length) { const cw = document.createElement("div"); cw.className = "chips"; cw.innerHTML = chips.map(c => '<span class="chip ' + c[0] + '">' + c[1] + "</span>").join(""); title.appendChild(cw); }
     if (state.state === "error") note.textContent = "Could not refresh. Press Refresh to try again.";
     else if (d.failedTeams) note.textContent = "Could not read " + plural(d.failedTeams, "team", "teams") + ", so some matches may be missing. Press Refresh to try again.";
     list.hidden = !d.rows.length;
