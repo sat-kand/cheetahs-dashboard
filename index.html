@@ -1001,9 +1001,14 @@ function pcFindMatches(label, first) {
     const seasons = newestSeasons(await api.getSeasons(), new Date(), 2);
     const all = [];
     for (const s of seasons) all.push(...await api.getTeams(s.id));
-    /* the name with what's in brackets (coach or B13 colour) first, then without it */
-    let teams = all.filter(t => norm(t.name, true) === norm(label, true));
-    if (!teams.length) teams = all.filter(t => norm(t.name) === norm(label));
+    /* "U12 Division 1" here is "Juniors U12 Div 1" there, and "U13 Division 3" just "Juniors U13": compare squashed names
+       ("u12div1"), first with what's in brackets (coach or B13 colour), then without, then by age group alone when the
+       club has only one team of that age */
+    const key = (x, br) => norm(x, br).replace(/division/g, "div").replace(/\s+/g, "");
+    const age = x => (key(x).match(/^(u\d+|girls)/) || [""])[0];
+    let teams = all.filter(t => key(t.name, true) === key(label, true));
+    if (!teams.length) teams = all.filter(t => key(t.name) === key(label));
+    if (!teams.length && age(label)) { const same = all.filter(t => age(t.name) === age(label)); if (same.length === 1) teams = same; }
     const out = [];
     for (const t of teams) {
       const list = await api.getTeamMatches(t.id);
