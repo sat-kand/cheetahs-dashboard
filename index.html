@@ -249,6 +249,62 @@ td.num { font-weight: 700; color: var(--heading); }
 }
 @media (max-width: 520px) { .tab { padding: 8px 12px; font-size: 1rem; } .logo { height: 68px; } h1 { font-size: 1.8rem; } .big { font-size: 2.2rem; } }
 @media (prefers-reduced-motion: no-preference) { .seg button, .copy { transition: background 0.12s; } }
+
+/* ---- 2026 refresh: compact branded header, tab bar and list panels ---- */
+.masthead { border-bottom: 0; position: sticky; top: 0; z-index: 10; }
+.masthead-in { padding: 10px 16px; gap: 12px; }
+.logo { height: 46px; }
+h1 { font-size: 1.55rem; }
+.masthead .sub { font-size: 0.85rem; }
+.masthead .sub #status:not(:empty)::before { content: "· "; }
+.hd-refresh { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 0.85rem; font-weight: 600;
+  padding: 6px 14px; border-radius: 999px; border: 1px solid var(--gold); background: transparent; color: var(--gold); cursor: pointer; }
+.hd-refresh:hover { background: rgba(255, 199, 44, 0.12); }
+.hd-refresh svg { width: 15px; height: 15px; }
+.hd-refresh.busy svg { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.navbar { border-top: 1px solid rgba(255, 255, 255, 0.14); }
+.masthead .tabs { max-width: 1180px; margin: 0 auto; padding: 0 8px; border-bottom: 0; gap: 2px; scrollbar-width: none; }
+.masthead .tabs::-webkit-scrollbar { display: none; }
+.masthead .tab { font-family: var(--font-body); font-weight: 500; font-size: 0.92rem; text-transform: none; letter-spacing: 0;
+  padding: 10px 12px; margin-bottom: 0; color: var(--on-brand-muted); border-bottom: 3px solid transparent; }
+.masthead .tab:hover { color: #fff; }
+.masthead .tab[aria-selected="true"] { color: #fff; border-bottom-color: var(--gold); }
+.masthead .tab:focus-visible { outline-color: var(--gold); outline-offset: -3px; }
+.panel .toolbar .refresh { display: none; }
+.wrap { padding-top: 20px; }
+/* list panels (Club XII, Highlights) */
+#panel-xii .summary, #panel-hl .summary { background: none; border: 0; padding: 0; font-size: 0.88rem; color: var(--muted); text-wrap: pretty; }
+#panel-xii .summary strong, #panel-hl .summary strong { color: var(--ink); }
+#panel-xii .block, #panel-hl .block { gap: 8px; }
+#panel-xii h2, #panel-hl h2 { font-size: 1.25rem; }
+#panel-xii h2::after, #panel-hl h2::after { display: none; }
+#panel-hl [data-hl-view] { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; align-items: start; }
+#panel-xii .grid, #panel-hl .grid { display: block; }
+.lst { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.lst-h { background: var(--brand); color: #fff; padding: 7px 12px; display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 0.9rem; }
+.lst-h .n { margin-left: auto; background: var(--gold); color: var(--brand); border-radius: 999px; padding: 0 8px; font-size: 0.78rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.lr { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-top: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.lst-h + .lr { border-top: 0; }
+.lr .no { flex: none; width: 1.5em; text-align: right; color: var(--muted); font-size: 0.85rem; }
+.lr .who { flex: 1; min-width: 0; }
+.lr .nm { font-weight: 600; overflow-wrap: anywhere; }
+.lr .sub2 { font-size: 0.8rem; color: var(--muted); }
+.lr .fig { flex: none; text-align: right; font-weight: 700; color: var(--heading); white-space: nowrap; }
+.lr .fig small { display: block; font-weight: 400; font-size: 0.75rem; color: var(--muted); }
+.lr .role { flex: none; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; padding: 1px 7px; border-radius: 999px; background: var(--pill-bg); color: var(--pill-ink); min-width: 42px; text-align: center; }
+.lr .cap { font-size: 0.7rem; font-weight: 700; padding: 0 5px; margin-left: 4px; border-radius: 4px; background: var(--gold); color: var(--brand); vertical-align: 1px; }
+.lr .livepill { display: inline-block; margin-left: 6px; font-size: 0.68rem; font-weight: 700; padding: 0 6px; border-radius: 999px; background: var(--gold); color: var(--brand); }
+.lr.empty-row { color: var(--muted); font-size: 0.88rem; }
+.lst-group { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); background: var(--hover); padding: 4px 12px; border-top: 1px solid var(--line); }
+.lst-h + .lst-group { border-top: 0; }
+#panel-xii .lst { max-width: 720px; }
+@media (max-width: 520px) {
+  .logo { height: 38px; } h1 { font-size: 1.3rem; } .masthead .sub { font-size: 0.78rem; }
+  .hd-refresh span { display: none; } .hd-refresh { padding: 7px; }
+  .masthead .tab { padding: 9px 10px; font-size: 0.88rem; }
+  #panel-hl [data-hl-view] { grid-template-columns: minmax(0, 1fr); }
+}
 </style>
 </head>
 <body>
@@ -256,23 +312,27 @@ td.num { font-weight: 700; color: var(--heading); }
   <div class="masthead-in">
     <img class="logo" src="logo.png" width="96" height="97" alt="Parramatta Cheetahs Cricket Club crest">
     <div class="masthead-text">
-      <h1>Parramatta Cheetahs Cricket Club Dashboard</h1>
-      <p class="sub"><span id="status"></span></p>
+      <h1>Parramatta Cheetahs</h1>
+      <p class="sub">Cricket club dashboard <span id="status"></span></p>
     </div>
+    <button type="button" class="hd-refresh" id="hd-refresh" aria-label="Refresh this page's data"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Refresh</span></button>
   </div>
+  <nav class="navbar">
+  <div class="tabs" role="tablist" aria-label="Pages">
+      <button type="button" class="tab" role="tab" id="tab-scores" data-tab="scores" aria-controls="panel-scores" aria-selected="true">Senior scores</button>
+      <button type="button" class="tab" role="tab" id="tab-jscores" data-tab="jscores" aria-controls="panel-jscores" aria-selected="false">Junior scores</button>
+      <button type="button" class="tab" role="tab" id="tab-milestones" data-tab="milestones" aria-controls="panel-milestones" aria-selected="false">Milestones</button>
+      <button type="button" class="tab" role="tab" id="tab-xii" data-tab="xii" aria-controls="panel-xii" aria-selected="false">Club XII</button>
+      <button type="button" class="tab" role="tab" id="tab-hl" data-tab="hl" aria-controls="panel-hl" aria-selected="false">Highlights</button>
+      <button type="button" class="tab" role="tab" id="tab-audit" data-tab="audit" aria-controls="panel-audit" aria-selected="false">Scorecard audit</button>
+      <button type="button" class="tab" role="tab" id="tab-records" data-tab="records" aria-controls="panel-records" aria-selected="false">Records</button>
+    </div>
+  </nav>
 </header>
 
 <div class="wrap">
 
-  <div class="tabs" role="tablist" aria-label="Pages">
-    <button type="button" class="tab" role="tab" id="tab-scores" data-tab="scores" aria-controls="panel-scores" aria-selected="true">Senior Scores</button>
-    <button type="button" class="tab" role="tab" id="tab-jscores" data-tab="jscores" aria-controls="panel-jscores" aria-selected="false">Junior Scores</button>
-    <button type="button" class="tab" role="tab" id="tab-milestones" data-tab="milestones" aria-controls="panel-milestones" aria-selected="false">Milestones</button>
-    <button type="button" class="tab" role="tab" id="tab-xii" data-tab="xii" aria-controls="panel-xii" aria-selected="false">Club XII</button>
-    <button type="button" class="tab" role="tab" id="tab-hl" data-tab="hl" aria-controls="panel-hl" aria-selected="false">Highlights</button>
-    <button type="button" class="tab" role="tab" id="tab-audit" data-tab="audit" aria-controls="panel-audit" aria-selected="false">Scorecard Audit</button>
-    <button type="button" class="tab" role="tab" id="tab-records" data-tab="records" aria-controls="panel-records" aria-selected="false">Records</button>
-  </div>
+
 
   <div class="panel" id="panel-milestones" role="tabpanel" aria-labelledby="tab-milestones" hidden>
   <div class="toolbar">
@@ -2641,43 +2701,35 @@ function renderXII() {
   if (d.failed > 0) sum.innerHTML += '<span class="bad">Could not check ' + plural(d.failed, "player", "players") + ", so they may be missing. Press Refresh to try again.</span>";
   const x = d.xii;
   const groups = [
-    { kind: "bat", title: "Batters", n: XII_BATTERS, list: x.batters, empty: "No run scorers." },
-    { kind: "keep", title: "Wicketkeeper", n: 1, list: x.keeper ? [x.keeper] : [], empty: "No wicketkeeper dismissals recorded." },
-    { kind: "bowl", title: "Bowlers", n: XII_BOWLERS, list: x.bowlers, empty: "No wicket takers." }
+    { kind: "bat", title: "Batters", role: "Bat", n: XII_BATTERS, list: x.batters, empty: "No run scorers." },
+    { kind: "keep", title: "Wicketkeeper", role: "WK", n: 1, list: x.keeper ? [x.keeper] : [], empty: "No wicketkeeper dismissals recorded." },
+    { kind: "bowl", title: "Bowlers", role: "Bowl", n: XII_BOWLERS, list: x.bowlers, empty: "No wicket takers." }
   ];
+  const box = document.createElement("section");
+  box.className = "lst";
+  box.setAttribute("aria-label", "Club XII");
+  box.innerHTML = '<div class="lst-h">Club XII · ' + esc(r.name) + '<span class="n">' + (x.batters.length + (x.keeper ? 1 : 0) + x.bowlers.length) + "</span></div>";
   let k = 0;
   for (const g of groups) {
-    const card = document.createElement("section");
-    card.className = "card";
-    card.setAttribute("aria-label", g.title);
-    const head = document.createElement("div");
-    head.className = "card-head";
-    head.innerHTML = '<span class="big">' + g.n + '</span><span class="label">' + g.title + "</span>";
-    card.appendChild(head);
-    if (!g.list.length) {
-      const p = document.createElement("p"); p.className = "empty"; p.textContent = g.empty; card.appendChild(p);
-    } else {
-      const ul = document.createElement("ul");
-      for (const p of g.list) {
-        k++;
-        const li = document.createElement("li");
-        const nm = document.createElement("span"); nm.className = "name";
-        const num = document.createElement("span"); num.className = "xnum"; num.textContent = k;
-        nm.append(num, document.createTextNode(p.name + (x.captain && x.captain.id === p.id ? " (C)" : "")));
-        const meta = document.createElement("span"); meta.className = "meta";
-        const fig = document.createElement("span"); fig.textContent = xiiFigure(g.kind, p);
-        const pill = document.createElement("span"); pill.className = "pill"; pill.textContent = gradeFor(g.kind, p);
-        meta.append(fig, pill);
-        li.append(nm, meta);
-        ul.appendChild(li);
-      }
-      card.appendChild(ul);
-      if (g.list.length < g.n) {
-        const p = document.createElement("p"); p.className = "empty"; p.textContent = "Only " + g.list.length + " qualified."; card.appendChild(p);
-      }
-    }
-    grid.appendChild(card);
+    const gh = document.createElement("div"); gh.className = "lst-group"; gh.textContent = g.title; box.appendChild(gh);
+    if (!g.list.length) { box.appendChild(listRow({ cls: "empty-row", text: g.empty })); continue; }
+    for (const p of g.list) box.appendChild(listRow({ no: ++k, name: p.name, cap: !!(x.captain && x.captain.id === p.id), sub: gradeFor(g.kind, p), fig: xiiFigure(g.kind, p), role: g.role }));
+    if (g.list.length < g.n) box.appendChild(listRow({ cls: "empty-row", text: "Only " + g.list.length + " qualified." }));
   }
+  grid.appendChild(box);
+}
+function esc(t) { return String(t).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]); }
+/* One compact row of a list panel: number, name (+ captain / not-finished marks), a muted sub-line, the figure and a role pill. */
+function listRow(o) {
+  const row = document.createElement("div");
+  row.className = "lr" + (o.cls ? " " + o.cls : "");
+  if (o.text) { row.textContent = o.text; return row; }
+  row.innerHTML = (o.no != null ? '<span class="no">' + o.no + "</span>" : "") +
+    '<div class="who"><div class="nm">' + esc(o.name) + (o.cap ? '<span class="cap" title="Captain">C</span>' : "") + (o.live ? '<span class="livepill">Not finished</span>' : "") + "</div>" +
+    (o.sub ? '<div class="sub2">' + esc(o.sub) + "</div>" : "") + "</div>" +
+    '<span class="fig">' + esc(o.fig) + (o.figSub ? "<small>" + esc(o.figSub) + "</small>" : "") + "</span>" +
+    (o.role ? '<span class="role">' + esc(o.role) + "</span>" : "");
+  return row;
 }
 function xiiText() {
   const d = xii.data;
@@ -2753,34 +2805,18 @@ function renderHLSection(s) {
   if (hl.state === "error") sum.innerHTML += '<span class="bad">Could not refresh, so this is from ' + fmtDate(hl.at) + ". Press Refresh to try again.</span>";
   if (d.failedTeams > 0) sum.innerHTML += '<span class="bad">Could not read the fixtures for ' + plural(d.failedTeams, "team", "teams") + ", so some may be missing. Press Refresh to try again.</span>";
   if (d.failed > 0) sum.innerHTML += '<span class="bad">Could not check ' + plural(d.failed, "player", "players") + ", so they may be missing. Press Refresh to try again.</span>";
-  const card = document.createElement("section");
-  card.className = "card";
   const label = short + " " + K.unit;
-  card.setAttribute("aria-label", label);
-  const head = document.createElement("div");
-  head.className = "card-head";
-  head.innerHTML = '<span class="big">' + items.length + '</span><span class="label">' + label + "</span>";
-  card.appendChild(head);
-  if (!items.length) {
-    const p = document.createElement("p"); p.className = "empty"; p.textContent = K.none(s.min, s.max); card.appendChild(p);
-  } else {
-    const ul = document.createElement("ul");
-    items.forEach((p, i) => {
-      const li = document.createElement("li");
-      const nm = document.createElement("span"); nm.className = "name";
-      const num = document.createElement("span"); num.className = "xnum"; num.textContent = i + 1;
-      nm.append(num, document.createTextNode(p.name));
-      const meta = document.createElement("span"); meta.className = "meta";
-      const fig = document.createElement("span"); fig.textContent = K.fig(p);
-      const pill = document.createElement("span"); pill.className = "pill"; pill.textContent = hlWhere(p);
-      meta.append(fig, pill);
-      if (p.live) { const lv = document.createElement("span"); lv.className = "pill now"; lv.textContent = "Not finished"; meta.appendChild(lv); }
-      li.append(nm, meta);
-      ul.appendChild(li);
-    });
-    card.appendChild(ul);
-  }
-  grid.appendChild(card);
+  const box = document.createElement("section");
+  box.className = "lst";
+  box.setAttribute("aria-label", label);
+  box.innerHTML = '<div class="lst-h">' + esc(label.charAt(0).toUpperCase() + label.slice(1)) + '<span class="n">' + items.length + "</span></div>";
+  if (!items.length) box.appendChild(listRow({ cls: "empty-row", text: K.none(s.min, s.max) }));
+  items.forEach((p, i) => {
+    const main = K === HL_BAT ? p.runs + (p.notOut ? "*" : "") : p.wkts + "/" + p.conc;
+    const extra = K === HL_BAT ? (p.balls ? p.balls + " balls" : "") : (p.overs != null && p.overs !== "" ? p.overs + " overs" : "");
+    box.appendChild(listRow({ no: i + 1, name: p.name, sub: hlWhere(p), fig: main, figSub: extra, live: p.live }));
+  });
+  grid.appendChild(box);
 }
 function hlJuniorDates(r) { return fmtDay(r.first) + (r.last !== r.first ? " to " + fmtDay(r.last) : ""); }
 function renderHL() {
@@ -3227,6 +3263,16 @@ document.querySelector(".tabs").addEventListener("keydown", e => {
   const next = tabs[(tabs.indexOf(document.activeElement) + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
   next.focus(); showTab(next.dataset.tab, true);
 });
+/* The header's Refresh presses the open tab's own Refresh button, and spins while that one is busy. */
+(() => {
+  const hb = $("hd-refresh");
+  const target = () => { const p = [...document.querySelectorAll(".panel")].find(x => !x.hidden); return p && p.querySelector(".refresh"); };
+  hb.addEventListener("click", () => { const t = target(); if (t && !t.disabled) t.click(); });
+  const sync = () => { const t = target(); hb.classList.toggle("busy", !!(t && t.disabled)); };
+  const mo = new MutationObserver(sync);
+  document.querySelectorAll(".panel .refresh").forEach(b => mo.observe(b, { attributes: true, attributeFilter: ["disabled"] }));
+  document.querySelectorAll(".panel").forEach(p => mo.observe(p, { attributes: true, attributeFilter: ["hidden"] }));
+})();
 sections.forEach(renderSection); renderWatch();
 /* Once the opening tab has loaded, the other PlayHQ tabs load quietly in the background, one after another, so they
    are ready when opened. They reuse everything already fetched, so this costs only what each tab adds. */
