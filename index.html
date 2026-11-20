@@ -242,7 +242,10 @@ td.num { font-weight: 700; color: var(--heading); }
 .st { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; padding: 2px 8px; border-radius: 999px; background: var(--pill-bg); color: var(--pill-ink); white-space: nowrap; }
 .st.won { background: #1f7a3d; color: #fff; }
 .st.lost { background: #b3261e; color: #fff; }
-.st.progress { background: var(--gold); color: var(--brand); }
+.st.progress { background: #fff; color: #b3261e; box-shadow: inset 0 0 0 1.5px #b3261e; display: inline-flex; align-items: center; gap: 5px; }
+.st.progress::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #e0312a; animation: livedot 1.4s ease-in-out infinite; }
+@keyframes livedot { 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .st.progress::before { animation: none; } }
 @media (max-width: 860px) {
   .layout { grid-template-columns: minmax(0, 1fr); }
   .side { position: static; }
@@ -1404,6 +1407,14 @@ function matchOutcome(m, us, them) {
 /* One team's innings as [{ score, overs }], leaving out an innings that has not started (0-0).
    From the scorecard when there is one (it has overs for every innings); otherwise from the fixture's score text,
    which only carries the overs of the first innings. */
+/* Won / lost / tied worked out from the two sides' runs, for a finished game with no official result (junior games
+   usually have none). Each innings score is "wickets-runs" or just "runs"; two-innings games add both innings. */
+function outcomeFromScores(us, them) {
+  const runs = list => list.reduce((a, i) => a + (Number((String(i.score).match(/(\d+)\D*$/) || [])[1]) || 0), 0);
+  if (!us.length || !them.length) return "finished";
+  const a = runs(us), b = runs(them);
+  return a > b ? "won" : a < b ? "lost" : "tied";
+}
 function inningsFromScorecard(sc, teamId) {
   const num = v => Number(v) || 0;
   return (sc.innings || []).filter(i => i.battingTeamId === teamId)
@@ -1670,12 +1681,14 @@ async function buildScores(api, now, kind) {
         const themId = (sc.innings.find(i => i.battingTeamId && i.battingTeamId !== team.id) || {}).battingTeamId;
         const them = themId ? inningsFromScorecard(sc, themId) : [];
         if (!us.length && !them.length) continue;
-        r.us = us; r.them.innings = them;
-        if (r.outcome === "pending") r.outcome = "progress";
+        r.us = us; r.them.innings = them; r.source = "pc";
+        if (String(sc.status || "").toUpperCase() === "COMPLETED") r.outcome = "finished";
+        else if (r.outcome === "pending") r.outcome = "progress";
         return;
       }
     } catch (e) { /* leave it as PlayHQ has it */ }
   });
+  for (const r of rows) if (r.outcome === "finished") r.outcome = outcomeFromScores(r.us, r.them.innings);
   /* An upcoming game whose team sheet for our side has no players yet gets flagged. A lookup that fails is left unflagged
      rather than guessed at. */
   if (api.getScorecard) {
