@@ -893,7 +893,7 @@ const PC_FALLBACK = new Map();
 function noFigures(sc) {
   if (!sc || !Array.isArray(sc.innings)) return true;
   return !sc.innings.some(i => (i.bowling || []).some(b => overBalls(b.oversBowled) > 0 || Number(b.wicketsTaken) > 0) ||
-    (i.batting || []).some(b => b.didBat || Number(b.runsScored) > 0 || Number(b.ballsFaced) > 0));
+    (i.batting || []).some(b => Number(b.runsScored) > 0 || Number(b.ballsFaced) > 0) || Number(i.runsScored) > 0);
 }
 function pcFallbackCard(e, phqSc) {
   if (!PC_FALLBACK.has(e.matchId)) PC_FALLBACK.set(e.matchId, (async () => {
