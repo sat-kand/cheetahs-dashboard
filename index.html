@@ -1737,20 +1737,11 @@ async function careerLists(api) {
 /* ---- Junior records ----
    The club's career totals cover every grade at once, so for juniors each junior team's own statistics are read
    season by season and added up. That also gives the candidates for the best individual innings. */
-/* Most matches as coach, assistant coach and manager, from each completed junior match's team sheet (Play Cricket's
-   non-playing members and their roles). A person counts once per match per role, whichever of our teams it was.
-   Team sheets enter every non-player as plain "Coach", so the head coach is told apart by the team's own name: a team
-   named after its coach ("Juniors U10 White(Murali)") has that coach as head, and any other coach on its sheet is an
-   assistant. A team with no coach in its name (U12 and up) can't be split this way, so its coaches all count as coach.
-   A sheet that does say "Assistant Coach" or "Manager" is always taken at its word. */
-/* "Muralidharan Nandagopan" is the "Murali" of "U10 White (Murali)": a name word that starts with the short name. */
-function namesMatch(full, short) {
-  const a = String(full).toLowerCase(), b = String(short).toLowerCase().trim();
-  return !!b && (a.includes(b) || a.split(/\s+/).some(w => w.length >= 3 && (w.startsWith(b) || b.startsWith(w))));
-}
+/* Most matches as coach, from each completed junior match's team sheet (Play Cricket's non-playing members and
+   their roles). Anyone listed with a coach role (head or assistant) counts as a coach; a person counts once per
+   match, whichever of our teams it was. */
 async function juniorOfficials(api, rows) {
-  const tally = { coach: new Map(), assistant: new Map(), manager: new Map() };
-  const roleOf = r => /assist/i.test(r) ? "assistant" : /manag/i.test(r) ? "manager" : /coach/i.test(r) ? "coach" : "";
+  const coach = new Map();
   await mapLimit(rows, 10, async r => {
     let d;
     try { d = await api.getMatch(r.id); } catch (e) { return; }
@@ -1758,20 +1749,16 @@ async function juniorOfficials(api, rows) {
     for (const m of ((side && (side.NonPlayingMembers || side.nonPlayingMembers)) || [])) {
       const name = displayName(tidyName(m.Name || m.name || ""));
       if (!name || isHiddenName(name)) continue;
-      const roles = new Set((m.Roles || m.roles || []).map(roleOf).filter(Boolean));
-      const head = (String(r.grade).match(/\(([^)]+)\)\s*$/) || [])[1];
-      if (head && roles.has("coach") && !namesMatch(name, head)) { roles.delete("coach"); roles.add("assistant"); }
-      for (const role of roles) {
-        const e = tally[role].get(name) || { who: name, matches: new Set(), teams: new Set() };
-        e.matches.add(r.id);
-        e.teams.add(String(r.grade).replace(/\s*\([^)]*\)/g, "").trim());
-        tally[role].set(name, e);
-      }
+      if (!(m.Roles || m.roles || []).some(x => /coach/i.test(x))) continue;
+      const e = coach.get(name) || { who: name, matches: new Set(), teams: new Set() };
+      e.matches.add(r.id);
+      e.teams.add(String(r.grade).replace(/\s*\([^)]*\)/g, "").trim());
+      coach.set(name, e);
     }
   });
   const top = m => [...m.values()].map(e => ({ who: e.who, value: e.matches.size, det: [...e.teams].sort((a, b) => juniorRank(a) - juniorRank(b) || a.localeCompare(b)).join(", ") }))
     .sort((a, b) => b.value - a.value || a.who.localeCompare(b.who)).slice(0, RECORDS_TOP);
-  return { coach: top(tally.coach), assistant: top(tally.assistant), manager: top(tally.manager) };
+  return { coach: top(coach) };
 }
 async function buildJuniorRecords(api) {
   const seasons = await api.getSeasons();
@@ -3090,9 +3077,7 @@ function renderRecords() {
   const groups = [["Most matches", career.matches, "matches"], ["Most runs", career.runs, "runs"],
                   ["Most wickets", career.wickets, "wickets"], ["Most dismissals", career.dismissals, "dismissals"]]
     .concat(junior ? [] : [["Most premierships", premiershipList()]]) /* the juniors have no titles yet */
-    .concat(junior ? [["Most matches as coach", career.coach, "officials"],
-                      ["Most matches as assistant coach", career.assistant, "officials", "No assistant coaches are named on the team sheets yet."],
-                      ["Most matches as manager", career.manager, "officials", "No managers are named on the team sheets yet."]] : [])
+    .concat(junior ? [["Most matches as coach", career.coach, "officials"]] : [])
     .concat([["Highest individual score", d.records.batting], ["Best bowling in an innings", d.records.bowling],
              ["Highest team total", d.records.totals], ["Highest score chased", d.records.chases],
              ["Biggest win by runs", d.records.runs], ["Biggest innings win", d.records.innings]]);
