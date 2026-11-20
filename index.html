@@ -1619,13 +1619,18 @@ async function buildScores(api, now, kind) {
   /* the scorecard has the overs of every innings; keep the fixture figures if it cannot be read */
   if (api.getScorecard) {
     const cards = new Map(); /* one lookup per match, even when two of our teams share it */
-    const card = id => { if (!cards.has(id)) cards.set(id, api.getScorecard(id)); return cards.get(id); };
+    /* a game still being played is always read afresh (never a copy remembered earlier in the visit), so live scores move;
+       finished games use the shared copy */
+    const card = (id, live) => { if (!cards.has(id)) cards.set(id, live && api.getScorecardFresh ? api.getScorecardFresh(id) : api.getScorecard(id)); return cards.get(id); };
     await mapLimit(rows.filter(r => r.usId && r.outcome !== "upcoming" && r.outcome !== "pending"), 6, async r => {
       try {
-        const sc = await card(r.id);
+        const sc = await card(r.id, r.outcome === "progress");
         if (!sc || !Array.isArray(sc.innings)) return;
-        r.us = inningsFromScorecard(sc, r.usId);
-        if (r.themId) r.them.innings = inningsFromScorecard(sc, r.themId);
+        /* the scorecard can lag the live score in the fixture: keep the fixture's figures unless the scorecard has some */
+        const us = inningsFromScorecard(sc, r.usId), them = r.themId ? inningsFromScorecard(sc, r.themId) : [];
+        if (!us.length && !them.length) return;
+        r.us = us;
+        if (r.themId) r.them.innings = them;
       } catch (e) { /* keep the fixture figures */ }
     });
   }
