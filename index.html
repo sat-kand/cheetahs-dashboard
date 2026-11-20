@@ -884,6 +884,41 @@ async function latestJuniorMatchesNow(api, now) {
   }
   return { picked: [...perTeam.values()], failedTeams };
 }
+/* ---- Play Cricket fallback for junior games PlayHQ has no figures for ----
+   Only a finished game whose PlayHQ scorecard carries no batting or bowling figures at all is looked up, so every
+   other load costs no extra request. The Play Cricket team lists and fixtures are the same cached calls Junior
+   Records already makes, so at most a game's own two lookups (scorecard and team sheet) are new. Returns
+   { sc, teamId, ours } in the shape the PlayHQ scorecard has, or null if Play Cricket doesn't have it either. */
+const PC_FALLBACK = new Map();
+function noFigures(sc) {
+  if (!sc || !Array.isArray(sc.innings)) return true;
+  return !sc.innings.some(i => (i.bowling || []).some(b => overBalls(b.oversBowled) > 0 || Number(b.wicketsTaken) > 0) ||
+    (i.batting || []).some(b => b.didBat || Number(b.runsScored) > 0 || Number(b.ballsFaced) > 0));
+}
+function pcFallbackCard(e, phqSc) {
+  if (!PC_FALLBACK.has(e.matchId)) PC_FALLBACK.set(e.matchId, (async () => {
+    const api = pcApi();
+    const norm = x => String(x || "").replace(/^juniors?\s+/i, "").replace(/\s*\([^)]*\)/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+    const want = norm(e.label);
+    const seasons = newestSeasons(await api.getSeasons(), new Date(), 2);
+    const teams = [];
+    for (const s of seasons) for (const t of await api.getTeams(s.id)) if (norm(t.name) === want) teams.push(t);
+    for (const t of teams) {
+      const list = await api.getTeamMatches(t.id);
+      const m = list.find(x => (x.matchSchedule || []).map(y => parseDate(y.startDateTime)).filter(d => !isNaN(d)).map(ymdSydney).sort()[0] === e.first);
+      if (!m) continue;
+      const sc = await api.getScorecard(m.id);
+      if (!sc || !Array.isArray(sc.innings) || noFigures(sc)) continue;
+      const detail = await api.getMatch(m.id);
+      const ourSide = (detail.Teams || detail.teams || []).find(x => (x.Id || x.id) === t.id);
+      const roster = ((ourSide && (ourSide.Players || ourSide.players)) || []).map(p => ({ participantId: p.ParticipantId, name: tidyName(p.Name), roles: p.Roles || [] }));
+      const others = (sc.teams || []).filter(x => x.id !== t.id);
+      return { teamId: t.id, ours: roster, sc: { ...sc, gameType: (phqSc && phqSc.gameType) || sc.gameType || "", teams: [{ id: t.id, name: t.name, displayName: t.name, players: roster }, ...others] } };
+    }
+    return null;
+  })().catch(() => { PC_FALLBACK.delete(e.matchId); return null; }));
+  return PC_FALLBACK.get(e.matchId);
+}
 async function buildJuniorHighlights(api, now) {
   const { picked, failedTeams } = await latestJuniorMatches(api, now);
   if (!picked.length) return { round: null, failedTeams };
@@ -911,6 +946,27 @@ async function buildJuniorHighlights(api, now) {
         live: NOT_FINISHED.has(String(x.e.status || "").toUpperCase()) });
     });
     wkts.push(...hlHauls(m, { id: x.id, name: x.name, grade: x.e.label, rank: juniorHighRank(x.e.label), live: NOT_FINISHED.has(String(x.e.status || "").toUpperCase()) }, HL_JUNIOR_MIN_WKTS));
+  });
+  /* a finished game PlayHQ has no figures for: read it from Play Cricket instead */
+  await mapLimit(picked.filter(e => !NOT_FINISHED.has(String(e.status || "").toUpperCase())), 4, async e => {
+    let phq = null;
+    try { phq = await api.getScorecard(e.matchId); } catch (x) { phq = null; }
+    if (!noFigures(phq)) return;
+    const fb = await pcFallbackCard(e, phq);
+    if (!fb) return;
+    const nameOf = id => { const p = fb.ours.find(z => z.participantId === id); return p ? p.name : ""; };
+    const base = { grade: e.label, rank: juniorHighRank(e.label), live: false };
+    const mine = fb.sc.innings.filter(i => i.battingTeamId === fb.teamId), theirs = fb.sc.innings.filter(i => i.battingTeamId !== fb.teamId);
+    mine.forEach((inn, k) => (inn.batting || []).forEach(b => {
+      const runs = Number(b.runsScored) || 0, who = nameOf(b.participantId) || tidyName(b.playerShortName);
+      if (runs < HL_JUNIOR_MIN_RUNS || !who) return;
+      list.push({ ...base, id: b.participantId, name: who, runs, notOut: b.dismissalType === "", balls: Number(b.ballsFaced) || 0, innings: mine.length > 1 ? k + 1 : 0 });
+    }));
+    theirs.forEach((inn, k) => (inn.bowling || []).forEach(b => {
+      const wk = Number(b.wicketsTaken) || 0, who = nameOf(b.participantId) || tidyName(b.playerShortName);
+      if (wk < HL_JUNIOR_MIN_WKTS || !who) return;
+      wkts.push({ ...base, id: b.participantId, name: who, wkts: wk, conc: Number(b.runsConceded) || 0, overs: b.oversBowled, innings: theirs.length > 1 ? k + 1 : 0 });
+    }));
   });
   list.sort(hlOrder);
   wkts.sort(hlBowlOrder);
@@ -1035,8 +1091,13 @@ async function buildJuniorAudit(api, now) {
     const base = { matchId: e.matchId, grade: e.label, name: e.label, opponent: "", rank: juniorRank(e.label) };
     let sc = null;
     try { sc = await api.getScorecard(e.matchId); } catch (x) { sc = null; }
+    let ourId = e.teamId;
+    if (!notFinal && noFigures(sc)) {
+      const fb = await pcFallbackCard(e, sc);
+      if (fb) { sc = fb.sc; ourId = fb.teamId; }
+    }
     if (!sc || !Array.isArray(sc.innings)) { teams.push({ ...base, loaded: notFinal, issues: statusIssue }); return; }
-    const them = (sc.teams || []).find(x => x.id !== e.teamId);
+    const them = (sc.teams || []).find(x => x.id !== ourId);
     let keepers = null;
     if (cat.kind === "small") {
       try {
@@ -1045,8 +1106,8 @@ async function buildJuniorAudit(api, now) {
       } catch (x) { keepers = null; }
     }
     /* U14 and up get every senior check; the younger grades share only the hidden-name check */
-    const shared = auditTeam(sc, e.teamId, { checkKeeper: false }).filter(it => cat.kind === "big" || it.type === "names");
-    teams.push({ ...base, opponent: them ? them.displayName || them.name : "", loaded: true, issues: [...statusIssue, ...shared, ...auditJuniorRules(sc, e.teamId, cat, keepers)] });
+    const shared = auditTeam(sc, ourId, { checkKeeper: false }).filter(it => cat.kind === "big" || it.type === "names");
+    teams.push({ ...base, opponent: them ? them.displayName || them.name : "", loaded: true, issues: [...statusIssue, ...shared, ...auditJuniorRules(sc, ourId, cat, keepers)] });
   });
   teams.sort((a, b) => a.rank - b.rank || String(a.grade).localeCompare(String(b.grade)));
   const dates = picked.map(e => e.first).concat(picked.map(e => e.last)).sort();
