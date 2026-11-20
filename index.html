@@ -2781,8 +2781,8 @@ $("x-refresh").addEventListener("click", () => { phqReset(); loadXII(); });
    with this round's names and figures drawn on. The template and the italic font are fetched only when the button
    is pressed, so page loads are unaffected. Positions are in the template's 1254 x 1254 pixels. */
 const XII_IMG = { size: 1254, rowTop: i => 356 + 128.4 * i, cols: [
-  { gradeCx: 118, gradeW: 104, nameX: 200, nameW: 238, figR: 592 },
-  { gradeCx: 700, gradeW: 104, nameX: 778, nameW: 234, figR: 1194 }] };
+  { gradeCx: 118, gradeW: 104, nameX: 200, nameW: 238, figR: 592, figW: 78 },
+  { gradeCx: 700, gradeW: 104, nameX: 778, nameW: 234, figR: 1194, figW: 104 }] };
 let XII_FONT = null;
 function xiiFont() {
   if (!XII_FONT) XII_FONT = (async () => {
@@ -2832,7 +2832,7 @@ async function xiiImage() {
     const sp = g.indexOf(" ");
     ctx.font = ITAL(48);
     if (ctx.measureText(g).width <= c.gradeW || sp < 0 || sp <= 1) {
-      ctx.font = ITAL(fitSize(ctx, ITAL, g, c.gradeW, 52, 24)); ctx.fillText(g, c.gradeCx, cy + 2);
+      ctx.font = ITAL(fitSize(ctx, ITAL, g, c.gradeW, 52, 16)); ctx.fillText(g, c.gradeCx, cy + 2);
     } else {
       const a = g.slice(0, sp), b = g.slice(sp + 1);
       const px = Math.min(fitSize(ctx, ITAL, a, c.gradeW, 36, 20), fitSize(ctx, ITAL, b, c.gradeW, 36, 20));
@@ -2841,7 +2841,8 @@ async function xiiImage() {
     /* name, wrapped onto two lines when long */
     const name = p.name + (capId && capId === p.id ? " (C)" : "");
     ctx.fillStyle = INK; ctx.textAlign = "left";
-    ctx.font = BOLD(40);
+    const one = fitSize(ctx, BOLD, name, c.nameW, 40, 30);
+    ctx.font = BOLD(one);
     if (ctx.measureText(name).width <= c.nameW) ctx.fillText(name, c.nameX, cy + 2);
     else {
       const w = name.split(" ");
@@ -2858,11 +2859,14 @@ async function xiiImage() {
     ctx.fillStyle = WHITE; ctx.textAlign = "right";
     if (r.kind === "keep") {
       const n = (p.kc || 0) + (p.st || 0), what = p.st && p.kc ? "(Dismissals)" : p.st ? (p.st === 1 ? "(Stumping)" : "(Stumpings)") : (n === 1 ? "(Catch)" : "(Catches)");
-      ctx.font = ITAL(24); const ww = ctx.measureText(what).width; ctx.fillText(what, c.figR, cy + 4);
-      ctx.font = ITAL(48); ctx.fillText(String(n), c.figR - ww - 8, cy + 4);
+      let big = 48, small = 22;
+      const width = () => { ctx.font = ITAL(small); const a = ctx.measureText(what).width; ctx.font = ITAL(big); return a + 6 + ctx.measureText(String(n)).width; };
+      while (width() > c.figW && small > 12) { small--; big = Math.max(30, big - 1); }
+      ctx.font = ITAL(small); const ww = ctx.measureText(what).width; ctx.fillText(what, c.figR, cy + 4);
+      ctx.font = ITAL(big); ctx.fillText(String(n), c.figR - ww - 6, cy + 4);
     } else {
       const f = r.kind === "bat" ? p.runs + (p.notOut ? "*" : "") : p.wkts + "/" + p.conc;
-      ctx.font = ITAL(fitSize(ctx, ITAL, f, 104, 56, 30)); ctx.fillText(f, c.figR, cy + 4);
+      ctx.font = ITAL(fitSize(ctx, ITAL, f, c.figW, 56, 26)); ctx.fillText(f, c.figR, cy + 4);
     }
   }
   return new Promise((ok, bad) => cv.toBlob(b => b ? ok(b) : bad(new Error("Could not make the image.")), "image/png"));
