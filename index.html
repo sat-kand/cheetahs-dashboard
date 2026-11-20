@@ -2126,9 +2126,7 @@ async function getJSON(path, keep) {
   if (PC_HTTP_CACHE.has(path)) return PC_HTTP_CACHE.get(path);
   const p = (async () => {
     if (keep) { const kept = await pcStoreGet(path); if (kept) { PC_KEPT.add(path); return kept; } }
-    const r = await fetch(API_BASE + path);
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    const t = await r.text();
+    const t = await fetchRetry(API_BASE + path);
     const j = t ? JSON.parse(t) : {};
     if (keep) { const ms = keep(j); if (ms) PC_KEPT.add(path); pcStorePut(path, t, ms); }
     return j;
@@ -2254,15 +2252,32 @@ const phqFinished = (path, j) => {
   if (/\/fixture/.test(path)) { const g = (j && j.data) || []; return g.length > 0 && !(j.metadata && j.metadata.hasMore) && g.every(x => PHQ_OVER.test(String(x.status || "").toUpperCase())); }
   return true;
 };
-async function phqStoreGet(path) {
+async function phqStoreGet(path, stale) {
   try {
     if (!phqStorable(path) || !window.caches) return null;
     const c = await caches.open(PHQ_STORE);
     const r = await c.match(PHQ_PROXY_BASE + path);
     if (!r) return null;
-    if (Date.now() - Number(r.headers.get("x-saved") || 0) > PHQ_KEEP_MS) { c.delete(PHQ_PROXY_BASE + path); return null; }
+    /* an expired copy is still good enough when PlayHQ itself is down */
+    if (!stale && Date.now() - Number(r.headers.get("x-saved") || 0) > PHQ_KEEP_MS) return null;
     return await r.json();
   } catch (e) { return null; }
+}
+const PHQ_LAST_GOOD = new Map(); /* the last good answer for each path this visit, used when a later read fails */
+/* A GET that tries again on a timeout, rate limit, server error or dropped connection (PlayHQ and Play Cricket both
+   have slow spells on match days): up to 3 tries, with a short pause between. Returns the body text. */
+async function fetchRetry(url) {
+  let last;
+  for (let i = 0; i < 3; i++) {
+    if (i) await new Promise(r => setTimeout(r, 700 * i));
+    try {
+      const r = await fetch(url);
+      if (r.ok) return await r.text();
+      last = new Error("HTTP " + r.status);
+      if (r.status < 500 && r.status !== 429 && r.status !== 408) throw last; /* a real "no" is not retried */
+    } catch (e) { last = e; if (/^HTTP 4/.test(e.message) && !/HTTP 4(08|29)/.test(e.message)) throw e; }
+  }
+  throw last;
 }
 const PHQ_KEPT = new Set(); /* paths whose answer is final, so Refresh leaves them alone */
 function phqStorePut(path, text, j) {
@@ -2277,12 +2292,18 @@ async function phqJSON(path, opts) {
   if (!fresh && PHQ_HTTP_CACHE.has(path)) return PHQ_HTTP_CACHE.get(path);
   const p = (async () => {
     if (!fresh) { const kept = await phqStoreGet(path); if (kept) { if (phqFinished(path, kept)) PHQ_KEPT.add(path); return kept; } }
-    const r = await fetch(PHQ_PROXY_BASE + path);
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    const t = await r.text();
-    const j = t ? JSON.parse(t) : {};
-    phqStorePut(path, t, j);
-    return j;
+    try {
+      const t = await fetchRetry(PHQ_PROXY_BASE + path);
+      const j = t ? JSON.parse(t) : {};
+      phqStorePut(path, t, j);
+      PHQ_LAST_GOOD.set(path, j);
+      return j;
+    } catch (e) {
+      /* PlayHQ down or timing out: use the last answer from this visit, or an expired saved copy, rather than failing */
+      const old = PHQ_LAST_GOOD.get(path) || await phqStoreGet(path, true);
+      if (old) return old;
+      throw e;
+    }
   })();
   /* a fresh read also replaces what is remembered, so the other tabs use the newer copy */
   PHQ_HTTP_CACHE.set(path, p);
