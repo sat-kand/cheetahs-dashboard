@@ -272,6 +272,7 @@ h1 { font-size: 1.55rem; }
 .masthead .tab[aria-selected="true"] { color: #fff; border-bottom-color: var(--gold); }
 .masthead .tab:focus-visible { outline-color: var(--gold); outline-offset: -3px; }
 .panel .toolbar .refresh { display: none; }
+.toolbar .actions { margin-left: auto; }
 .wrap { padding-top: 20px; }
 /* list panels (Club XII, Highlights) */
 #panel-xii .summary, #panel-hl .summary { background: none; border: 0; padding: 0; font-size: 0.88rem; color: var(--muted); text-wrap: pretty; }
@@ -409,11 +410,11 @@ h1 { font-size: 1.55rem; }
     </div>
   <div class="panel" id="panel-hl" role="tabpanel" aria-labelledby="tab-hl" hidden>
     <div class="toolbar">
-      <div class="actions"><button type="button" class="refresh" id="h-refresh">Refresh</button><button type="button" class="copy" id="h-copy">Copy list</button></div>
-    </div>
-    <div class="seg" id="seg-hl" role="group" aria-label="Senior or junior highlights">
+      <div class="seg" id="seg-hl" role="group" aria-label="Senior or junior highlights">
       <button type="button" data-view="senior" aria-pressed="true">Senior</button>
       <button type="button" data-view="junior" aria-pressed="false">Junior</button>
+    </div>
+      <div class="actions"><button type="button" class="refresh" id="h-refresh">Refresh</button><button type="button" class="copy" id="h-copy">Copy list</button></div>
     </div>
     <div data-hl-view="senior">
     <section class="block" aria-labelledby="h-hl">
