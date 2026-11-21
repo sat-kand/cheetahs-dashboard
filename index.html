@@ -3491,14 +3491,19 @@ document.querySelector(".tabs").addEventListener("keydown", e => {
   const next = tabs[(tabs.indexOf(document.activeElement) + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
   next.focus(); showTab(next.dataset.tab, true);
 });
-/* The header's Refresh presses the open tab's own Refresh button, and spins while that one is busy. */
+/* The header's Refresh presses the open tab's own Refresh button, and spins while that one is busy.
+   It also marks every other tab as out of date, but doesn't reload them: a tab re-reads only when it is next opened,
+   so tabs nobody looks at cost no requests, and what the first tab just read (in the last minute) is reused. */
 (() => {
   const hb = $("hd-refresh");
+  let refreshNo = 0;
+  const loadedAt = new Map(); /* panel -> the Refresh it last loaded after */
   const target = () => { const p = [...document.querySelectorAll(".panel")].find(x => !x.hidden); return p && p.querySelector(".refresh"); };
   let pending = null; /* the tab button the header press started, until that tab finishes loading */
   hb.addEventListener("click", () => {
     const t = target();
     if (!t || t.disabled) return;
+    refreshNo++;
     pending = t; setStatus("loading"); hb.classList.add("busy");
     t.click();
     if (!t.disabled) { pending = null; asOf = new Date().toISOString(); setStatus("live"); hb.classList.remove("busy"); } /* nothing to wait for */
@@ -3509,7 +3514,18 @@ document.querySelector(".tabs").addEventListener("keydown", e => {
     /* the load that the header press started has finished: show the new time, whichever tab it was */
     if (pending && !pending.disabled) { pending = null; asOf = new Date().toISOString(); setStatus("live"); }
   };
-  const mo = new MutationObserver(sync);
+  /* a tab opened after a Refresh it hasn't caught up with reloads quietly, showing what it had meanwhile */
+  const catchUp = () => setTimeout(() => {
+    const p = [...document.querySelectorAll(".panel")].find(x => !x.hidden), b = p && p.querySelector(".refresh");
+    if (b && !b.disabled && loadedAt.has(p) && loadedAt.get(p) < refreshNo) b.click();
+  }, 0);
+  const mo = new MutationObserver(recs => {
+    for (const r of recs) {
+      if (r.attributeName === "disabled" && r.target.disabled) loadedAt.set(r.target.closest(".panel"), refreshNo);
+      if (r.attributeName === "hidden" && !r.target.hidden) catchUp();
+    }
+    sync();
+  });
   document.querySelectorAll(".panel .refresh").forEach(b => mo.observe(b, { attributes: true, attributeFilter: ["disabled"] }));
   document.querySelectorAll(".panel").forEach(p => mo.observe(p, { attributes: true, attributeFilter: ["hidden"] }));
 })();
