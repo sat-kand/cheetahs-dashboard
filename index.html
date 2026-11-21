@@ -470,6 +470,11 @@ h1 { font-size: 1.55rem; line-height: 1.1; }
       <div class="summary" id="hw-summary">Loading the most recently played round…</div>
       <div class="grid xii-grid" id="hw-grid"></div>
     </section>
+    <section class="block" aria-labelledby="h-hldeb">
+      <h2 id="h-hldeb">Senior debutants of the round</h2>
+      <div class="summary" id="hdeb-summary">Checking each player's history for a first senior match…</div>
+      <div class="grid xii-grid" id="hdeb-grid"></div>
+    </section>
     </div>
     <div data-hl-view="junior" hidden>
     <section class="block" aria-labelledby="h-hlj">
@@ -915,6 +920,49 @@ async function buildFifties(api, now) {
   list.sort(hlOrder);
   wkts.sort(hlBowlOrder);
   return { round: { name: round.name, season: round.season, first: round.first, last: round.last, matches: round.matches.size }, list, wkts, failed, failedTeams };
+}
+/* ---- Highlights: senior debutants of the round ----
+   PlayHQ's API has no player history, so this reads Play Cricket (makeApi), which holds every season back to 2014/15
+   with the grade of each match. A player in the round's senior squads is a debutant when no earlier club senior match
+   can be found in any season. Their earlier club junior matches, if any, mark a junior moving up to seniors.
+   Each player's seasons are read newest first and the search stops at the first earlier senior match, so only the
+   few real debutants cost a read of every season (past seasons are kept in the browser for 30 days). */
+async function buildDebutants(api, now) {
+  const { round, failedTeams, teamIds } = await findLastRound(api, now, 2);
+  if (!round) return { round: null, failedTeams };
+  const roster = await roundRoster(api, round, teamIds);
+  const seasons = (await api.getSeasons()).filter(s => s.startDate && parseDate(s.startDate) <= now)
+    .sort((a, b) => parseDate(b.startDate) - parseDate(a.startDate));
+  const allTeams = await teamIdsFor(api, seasons);   /* every club team of every season, with its grade */
+  const isSeniorGrade = g => isSeniorTeam({ name: g });
+  let failed = 0;
+  const list = [];
+  const named = [...roster.values()].filter(e => /[a-z]/i.test(e.name) && !/^0{8}-/.test(e.id)); /* hidden players ("********") are left out */
+  await mapLimit(named, 6, async e => {
+    let junior = null; /* the player's most recent club junior grade, if any */
+    try {
+      for (const s of seasons) {
+        const perf = await api.getPerf(e.id, s.id);
+        for (const m of (Array.isArray(perf) ? perf : [])) {
+          if (round.matches.has(m.id) || matchFinalDay(m) > round.last) continue;  /* this round, or later */
+          const club = (m.teams || []).filter(t => allTeams.has(t.id));
+          if (!club.length) continue;                                             /* another club's match */
+          const grade = (m.grade && m.grade.name) || allTeams.get(club[0].id);
+          const senior = isSeniorGrade(grade), juniorGame = !senior && !/t20|twenty20|blast/i.test(grade);
+          if (!senior && (!juniorGame || junior)) continue;
+          if (!(await clubSideOf(api, e.id, m, allTeams))) continue;              /* played against the club */
+          if (senior) return;                                                     /* played seniors before */
+          junior = grade;
+        }
+      }
+    } catch (x) { failed++; return; }
+    const grades = [...new Set(e.grades.values())].sort((a, b) => gradeRank(a) - gradeRank(b));
+    const status = [...e.grades.keys()].map(id => (round.matches.get(id) || {}).status);
+    list.push({ id: e.id, name: e.name, grade: grades[0], rank: gradeRank(grades[0]), junior,
+      live: status.some(x => NOT_FINISHED.has(String(x || "").toUpperCase())) });
+  });
+  list.sort((a, b) => a.rank - b.rank || String(a.grade).localeCompare(String(b.grade)) || a.name.localeCompare(b.name));
+  return { round: { name: round.name, season: round.season, first: round.first, last: round.last, matches: round.matches.size }, list, failed, failedTeams };
 }
 /* Highest grade first (rank: lower is higher), then highest score, not out ahead on equal runs. */
 function hlOrder(a, b) {
@@ -3073,6 +3121,49 @@ function renderHL() {
   renderHLSection({ sum: "hj-summary", grid: "hj-grid", min: HL_JUNIOR_MIN_RUNS, data: d.junior, loading: jl, where: jw, kind: HL_BAT });
   renderHLSection({ sum: "hwj-summary", grid: "hwj-grid", min: HL_JUNIOR_MIN_WKTS, data: d.junior, loading: jl, where: jw, kind: HL_BOWL });
 }
+/* Debutants load on their own (every player's Play Cricket history, see buildDebutants), so the other tiles don't wait. */
+let hlDeb = { state: "idle", data: null, at: null };
+let debRun = 0;
+function debWhere(p) { return p.junior ? "Up from juniors (" + p.junior + ")" : "First match for the club"; }
+function renderDebutants() {
+  const sum = $("hdeb-summary"), grid = $("hdeb-grid");
+  grid.innerHTML = "";
+  if (hlDeb.state !== "error" && !hlDeb.data) { sum.textContent = "Checking each player's history for a first senior match…"; return; }
+  if (hlDeb.state === "error" && !hlDeb.data) {
+    sum.innerHTML = '<span class="bad" style="margin:0">Could not load the players\' history from Play Cricket. Press Refresh to try again.</span>';
+    return;
+  }
+  const d = hlDeb.data;
+  if (!d.round) {
+    sum.innerHTML = d.failedTeams ? '<span class="bad" style="margin:0">Could not read the fixtures. Press Refresh to try again.</span>' : "<strong>No matches have been played yet.</strong>";
+    return;
+  }
+  const up = d.list.filter(p => p.junior), fresh = d.list.filter(p => !p.junior);
+  sum.innerHTML = "<strong>" + d.round.name + "</strong> (" + xiiRounds(d.round) + ", " + d.round.season + "), " + plural(d.round.matches, "senior match", "senior matches") + ": " +
+    (d.list.length ? plural(d.list.length, "senior debut", "senior debuts") : "no senior debuts") + (up.length ? ", " + up.length + " of them up from juniors" : "") + ".";
+  if (hlDeb.state === "error") sum.innerHTML += '<span class="bad">Could not refresh, so this is from ' + fmtDate(hlDeb.at) + ". Press Refresh to try again.</span>";
+  if (d.failed > 0) sum.innerHTML += '<span class="bad">Could not check ' + plural(d.failed, "player", "players") + ", so some may be missing. Press Refresh to try again.</span>";
+  const box = document.createElement("section");
+  box.className = "lst";
+  box.setAttribute("aria-label", "Debutants");
+  box.innerHTML = '<div class="lst-h">Debutants<span class="n">' + d.list.length + "</span></div>";
+  if (!d.list.length) box.appendChild(listRow({ cls: "empty-row", text: "Nobody made a senior debut." }));
+  let no = 0;
+  for (const [title, items] of [["Juniors making their senior debut", up], ["Senior debut", fresh]]) {
+    if (!items.length) continue;
+    const g = document.createElement("div"); g.className = "lst-group"; g.textContent = title; box.appendChild(g);
+    for (const p of items) box.appendChild(listRow({ no: ++no, name: p.name, sub: debWhere(p), fig: shortGrade(p.grade), live: p.live }));
+  }
+  grid.appendChild(box);
+}
+function loadDebutants() {
+  const run = ++debRun;
+  hlDeb.state = "loading"; renderDebutants();
+  return buildDebutants(pcApi(), new Date())
+    .then(data => { if (run === debRun) hlDeb = { state: "ok", data, at: new Date().toISOString() }; })
+    .catch(() => { if (run === debRun) hlDeb.state = "error"; })
+    .finally(() => { if (run === debRun) renderDebutants(); });
+}
 function hlText(view) {
   const d = hl.data;
   if (!d) return "Parramatta Cheetahs highlights: not loaded yet.";
@@ -3095,6 +3186,13 @@ function hlText(view) {
     add("Parramatta Cheetahs senior 50's Club" + st, d.senior, HL_MIN_RUNS, 99, HL_BAT);
     add("Parramatta Cheetahs senior 5+ wickets" + st, d.senior, 5, null, HL_BOWL);
     add("Parramatta Cheetahs senior 4 wickets" + st, d.senior, HL_MIN_WKTS, HL_MIN_WKTS, HL_BOWL);
+    const dd = hlDeb.data;
+    if (dd && dd.round) {
+      out.push("Parramatta Cheetahs senior debutants - " + dd.round.name + " (" + xiiRounds(dd.round) + ")", "");
+      if (!dd.list.length) out.push("Nobody made a senior debut.");
+      dd.list.forEach((p, i) => out.push((i + 1) + ". " + p.name + " (" + shortGrade(p.grade) + ")" + (p.junior ? " - up from juniors" : "")));
+      out.push("");
+    }
   }
   return out.join("\n").trim();
 }
@@ -3104,6 +3202,7 @@ async function loadHL() {
   const btn = $("h-refresh");
   btn.disabled = true; btn.textContent = "Refreshing…";
   hl.state = "loading"; renderHL();
+  loadDebutants(); /* not awaited: shows when ready */
   try {
     const api = phq();
     const [senior, junior] = await Promise.all([buildFifties(api, new Date()), buildJuniorHighlights(api, new Date())]);
@@ -3116,7 +3215,7 @@ async function loadHL() {
     if (run === hlRun) { renderHL(); btn.disabled = false; btn.textContent = "Refresh"; }
   }
 }
-$("h-refresh").addEventListener("click", () => { phqReset(); loadHL(); });
+$("h-refresh").addEventListener("click", () => { phqReset(); pcReset(); loadHL(); });
 $("h-copy").addEventListener("click", async e => {
   const btn = e.currentTarget;
   try { await navigator.clipboard.writeText(hlText(hlView)); btn.textContent = "Copied"; }
