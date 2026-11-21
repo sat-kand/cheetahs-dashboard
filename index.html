@@ -2243,7 +2243,7 @@ function phqClearCache() { PHQ_HTTP_CACHE.clear(); }
    Refresh calls phqReset(), which drops only what can still change and keeps the rest. */
 const PHQ_STORE = "phq-v1";
 const PHQ_KEEP_MS = 12 * 3600 * 1000;
-const phqStorable = path => /\/(seasons|teams|grades)$/.test(path) || /\/games\/[^/]+\/summary$/.test(path) || /^\/v1\/teams\/[^/?]+\/fixture/.test(path);
+const phqStorable = path => /\/(seasons|teams|grades)(\?cursor=[^&]*)?$/.test(path) || /\/games\/[^/]+\/summary$/.test(path) || /^\/v1\/teams\/[^/?]+\/fixture/.test(path);
 /* A team's fixture list is kept only once every game in it is over (a past season's team); a current team's list
    always has games still to come, so it is fetched each visit. */
 const PHQ_OVER = /^(FINAL|ABANDONED|CANCELLED|FORFEIT)/;
