@@ -937,7 +937,7 @@ async function buildDebutants(api, now) {
   const isSeniorGrade = g => isSeniorTeam({ name: g });
   let failed = 0;
   const list = [];
-  const named = [...roster.values()].filter(e => /[a-z]/i.test(e.name) && !/^0{8}-/.test(e.id)); /* hidden players ("********") are left out */
+  const named = [...roster.values()].filter(e => !isHiddenName(e.name) && !/^0{8}-/.test(e.id)); /* hidden players ("********") and fill-ins with no profile are left out */
   await mapLimit(named, 6, async e => {
     let junior = null; /* the player's most recent club junior grade, if any */
     try {
@@ -1307,8 +1307,14 @@ function lowerKeys(o) {
 /* A name the scorecard hides (a player set to private shows as asterisks or a placeholder). */
 function isHiddenName(n) {
   const s = String(n == null ? "" : n).trim();
-  return !s || /\*/.test(s) || /^(private|hidden|unknown|anonymous)\b/i.test(s) || /\b(private|hidden) (player|participant)\b/i.test(s);
+  return !s || /\*/.test(s) || /^(private|hidden|unknown|anonymous)\b/i.test(s) || /\b(private|hidden) (player|participant)\b/i.test(s) ||
+    /^null(\s+null)?$/i.test(s) || isFillInName(s);
 }
+/* A fill-in entered without a player profile: named only "Fill-in Player" (or similar), not the player. */
+const FILL_IN_NAME = "Fill-in Player";
+function isFillInName(n) { return /^fill[\s-]*in(\s+player)?\s*\d*$/i.test(String(n == null ? "" : n).trim()); }
+const hiddenText = n => isFillInName(n) ? "is a fill-in with no player profile (shown as \"" + String(n).trim() + "\"); add the player's full profile"
+                                        : "has a hidden name (shown as \"" + (String(n || "").trim() || "blank") + "\")";
 const ordinal = n => n + (n === 1 ? "st" : n === 2 ? "nd" : n === 3 ? "rd" : "th");
 /* Checks for one club team in one match. sc = scorecard with lower-case keys; clubTeamId = our team in it.
    Returns [{ type: "batting" | "bowling" | "fielding" | "names" | "keeper", text }]. */
@@ -1322,9 +1328,13 @@ function auditTeam(sc, clubTeamId, opts) {
   const num = v => Number(v) || 0;
   const us = (sc.teams || []).find(t => t.id === clubTeamId) || { players: [] };
   const ourIds = new Set((us.players || []).map(p => p.participantId));
+  /* a fill-in with no profile is reported once, from the team list, not again for each batting, bowling or fielding line */
+  const listedFillIn = (us.players || []).some(p => p.fillIn || isFillInName(p.name));
+  const hiddenLine = n => isHiddenName(n) && !(listedFillIn && isFillInName(n));
 
   for (const p of (us.players || [])) {
-    if (isHiddenName(p.name)) add("names", "A player in the team list has a hidden name (shown as \"" + (String(p.name || "").trim() || "blank") + "\").");
+    if (p.fillIn || isFillInName(p.name)) add("names", "A player in the team list is a fill-in with no player profile (shown as \"" + (isHiddenName(p.name) && !isFillInName(p.name) ? FILL_IN_NAME : String(p.name).trim()) + "\"). Add the player's full profile.");
+    else if (isHiddenName(p.name) || p.hidden) add("names", "A player in the team list has a hidden name (shown as \"" + (String(p.name || "").trim() || "blank") + "\").");
   }
   if (checkKeeper && (us.players || []).length && !(us.players || []).some(p => (p.roles || []).some(r => /keeper/i.test(r)))) {
     add("keeper", "No wicketkeeper is marked in the team sheet.");
@@ -1360,7 +1370,7 @@ function auditTeam(sc, clubTeamId, opts) {
           { k: "batters' runs", v: bat }, { k: "byes", v: b }, { k: "leg byes", v: lb }, { k: "wides", v: w }, { k: "no balls", v: nb }, { k: "penalties", v: pen }
         ]) + " = " + sum + ", but the innings total is " + total + " (" + Math.abs(total - sum) + (sum < total ? " missing" : " too many") + ").");
       }
-      for (const x of batting) if (isHiddenName(x.playerShortName)) note("names", "a batter's name is hidden (shown as \"" + (String(x.playerShortName || "").trim() || "blank") + "\").");
+      for (const x of batting) if (hiddenLine(x.playerShortName)) note("names", "a batter " + hiddenText(x.playerShortName) + ".");
     } else {
       /* opponents batting: our bowling and fielding */
       const conceded = bowling.reduce((a, x) => a + num(x.runsConceded), 0);
@@ -1370,7 +1380,7 @@ function auditTeam(sc, clubTeamId, opts) {
           { k: "our bowlers' runs", v: conceded }, { k: "byes", v: b }, { k: "leg byes", v: lb }, { k: "penalties", v: pen }
         ]) + " = " + sum + ", but the innings total is " + total + " (" + Math.abs(total - sum) + (sum < total ? " missing" : " too many") + ").");
       }
-      for (const x of bowling) if (isHiddenName(x.playerShortName)) note("names", "a bowler's name is hidden (shown as \"" + (String(x.playerShortName || "").trim() || "blank") + "\").");
+      for (const x of bowling) if (hiddenLine(x.playerShortName)) note("names", "a bowler " + hiddenText(x.playerShortName) + ".");
       let caught = 0, stumped = 0, runOut = 0;
       for (const x of batting) {
         const type = String(x.dismissalType || "");
@@ -1394,7 +1404,7 @@ function auditTeam(sc, clubTeamId, opts) {
         /* an assisted run out credits two fielders, so more credits than run outs is normal */
         if (cr < runOut || (runOut === 0 && withRO > 0)) note("fielding", runOut + " run out in the scorecard, but " + cr + (cr === 1 ? " run out is" : " run outs are") + " credited to our fielders.");
       }
-      for (const f of mineFielders) if (isHiddenName(f.playerShortName)) note("names", "a fielder's name is hidden (shown as \"" + (String(f.playerShortName || "").trim() || "blank") + "\").");
+      for (const f of mineFielders) if (hiddenLine(f.playerShortName)) note("names", "a fielder " + hiddenText(f.playerShortName) + ".");
     }
   }
   return issues;
@@ -2489,11 +2499,19 @@ function phqFixtureToLegacy(g) {
    a Play Cricket scorecard: { teams: [{id, name, players}], innings: [{...}] }. */
 function phqAdaptScorecard(d) {
   const byId = new Map((d.appearances || []).map(a => [a.id, a]));
-  const fullName = id => { const a = byId.get(id); return a ? (a.firstName + " " + a.lastName).trim() : ""; };
+  /* A fill-in added without a player profile has no name at all (PlayHQ's own pages show "Fill-in Player"), so it is
+     named that way here and the audit asks for the full profile; never "null null". */
+  const fullName = id => {
+    const a = byId.get(id);
+    if (!a) return "";
+    const n = [a.firstName, a.lastName].filter(x => x != null && String(x).trim() && !/^null$/i.test(String(x).trim())).join(" ").trim();
+    return n || (a.isFillIn ? FILL_IN_NAME : "");
+  };
   const teams = (d.teams || []).map(t => ({
     id: t.id, displayName: t.name, name: t.name,
     /* coaches and managers are listed with the team too; only players count */
-    players: (d.appearances || []).filter(a => a.teamId === t.id && (!a.roleType || /player/i.test(a.roleType))).map(a => ({ participantId: a.id, name: fullName(a.id), roles: [] }))
+    players: (d.appearances || []).filter(a => a.teamId === t.id && (!a.roleType || /player/i.test(a.roleType))).map(a => ({ participantId: a.id, name: fullName(a.id), roles: [],
+      fillIn: !!a.isFillIn && a.isRegisteredPlayer === false, hidden: a.visible === false }))
   }));
   const stat = (arr, type) => { const e = (arr || []).find(x => x.type === type); return e ? e.value : 0; };
   /* sharedStatistics linkage (who bowled/fielded a dismissal) is inconsistently populated - some
