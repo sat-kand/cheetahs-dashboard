@@ -496,7 +496,7 @@ h1 { font-size: 1.55rem; line-height: 1.1; }
   <div class="panel scores-panel" id="panel-jscores" role="tabpanel" aria-labelledby="tab-jscores" hidden>
     <div class="scores-head">
       <div class="scores-title" id="j-title">Loading the current round…</div>
-      <div class="actions"><button type="button" class="refresh" id="j-refresh">Refresh</button><button type="button" class="copy" id="j-copy">Copy scores</button></div>
+      <div class="actions"><button type="button" class="refresh" id="j-refresh">Refresh</button><button type="button" class="copy" id="j-copy">Copy scores</button><button type="button" class="copy" id="j-img">Download image</button></div>
     </div>
     <div id="j-note" class="bad snote"></div>
     <div class="scores" id="j-list"></div>
@@ -3261,73 +3261,116 @@ function fmtTime12(t) {
   const h = Number(m[1]);
   return ((h % 12) || 12) + ":" + m[2] + (h < 12 ? "am" : "pm");
 }
-/* ---- Senior results social image: the club's results template (results-template.jpg, the round-4 post with the
-   round number and table rows cleared) with this round drawn on. Each row is stamped from results-rows.png, four clean
-   rows cut from the same post (won, lost, drawn and a brown pill for anything else), so the table keeps the post's own
-   look. Fonts and images are fetched only when the button is pressed. Positions are in the template's 1254 x 1254 pixels. */
-const RES_IMG = { size: 1254, rowX: 40, rowW: 1175, rowH: 46, cutY: 2, cutH: 41, top: 479, bottom: 1046, pitch: 40.6, sprite: { won: 0, lost: 1, drawn: 2, other: 3 } };
+/* ---- Results social images: the club's results posts (results-template.jpg for seniors, junior-template.jpg for juniors)
+   with the round number and table rows cleared and the real logo.png put in place of the posts' redrawn logo. This
+   round is drawn on. Each row is stamped from a strip of four clean rows cut from the same post (won, lost, drawn and a
+   brown result for anything else), so the table keeps the post's own look. Fonts and images are fetched only when the
+   button is pressed. Positions are in each template's own pixels. */
+const RES_IMG = {
+  senior: { size: 1254, tpl: "results-template.jpg", rows: "results-rows.png", rowX: 40, rowW: 1175, rowH: 46, cutY: 2, cutH: 41,
+    top: 479, bottom: 1046, pitch: 40.6, grow: 1.2,
+    num: { x: 86, w: 50, size: 28 }, team: { x: 132, w: 170, size: 29, align: "left", weight: 700, color: "#f7d21e" },
+    us: { x: 415, w: 196, align: "center" }, them: { x: 535, w: 246 }, theirs: { x: 895, w: 194, align: "center" },
+    result: { x: 1100, w: 178 }, textWeight: 400, textSize: 31, ink: "#4b1a08",
+    words: { won: "WON", lost: "LOST", drawn: "Drawn", tied: "TIED", bye: "BYE" } },
+  junior: { size: 1080, tpl: "junior-template.jpg", rows: "junior-rows.png", rowX: 43, rowW: 993, rowH: 41, cutY: 0, cutH: 41,
+    top: 352, bottom: 841, pitch: 40.75, grow: 1.25,
+    num: { x: 87, w: 70, size: 28 }, team: { x: 145, w: 200, size: 27, align: "left", weight: 700, color: "#2b1208" },
+    us: { x: 470, w: 112, align: "right" }, them: { x: 497, w: 168 }, theirs: { x: 792, w: 110, align: "right" },
+    result: { x: 920, w: 200 }, textWeight: 700, textSize: 27, ink: "#2b1208",
+    words: { won: "WON", lost: "LOST", drawn: "DRAWN", tied: "TIED", bye: "BYE" } }
+};
+const RES_SPRITE = { won: 0, lost: 1, drawn: 2, other: 3 };
 let RES_FONT = null;
 function resFont() {
   if (!RES_FONT) RES_FONT = (async () => {
     const l = document.createElement("link");
     l.rel = "stylesheet";
-    l.href = "https://fonts.googleapis.com/css2?family=Carlito:wght@400;700&family=Kaushan+Script&display=block";
+    l.href = "https://fonts.googleapis.com/css2?family=Carlito:wght@400;700&family=Kaushan+Script&family=Black+Ops+One&display=block";
     document.head.appendChild(l);
     await new Promise(r => { l.onload = r; l.onerror = r; });
-    await Promise.all(['400 28px "Carlito"', '700 28px "Carlito"', '100px "Kaushan Script"'].map(f => document.fonts.load(f).catch(() => {})));
+    await Promise.all(['400 28px "Carlito"', '700 28px "Carlito"', '100px "Kaushan Script"', '50px "Black Ops One"'].map(f => document.fonts.load(f).catch(() => {})));
   })();
   return RES_FONT;
 }
 function loadImg(src) {
   return new Promise((ok, bad) => { const im = new Image(); im.onload = () => ok(im); im.onerror = bad; im.src = src; });
 }
-const RES_WORD = { won: "WON", lost: "LOST", drawn: "Drawn", tied: "TIED", bye: "BYE", abandoned: "Abandoned", progress: "In progress", pending: "No scores", upcoming: "Upcoming" };
-async function resultsImage(d) {
+const RES_WORD = { abandoned: "Abandoned", progress: "In progress", pending: "No scores", upcoming: "Upcoming" };
+async function resultsImage(d, kind) {
   if (!d || !d.round || !d.rows.length) throw new Error("No round to draw yet.");
-  const [tpl, rowsImg] = await Promise.all([loadImg("results-template.jpg"), loadImg("results-rows.png"), resFont()]);
-  const S = RES_IMG.size, cv = document.createElement("canvas");
+  const L = RES_IMG[kind];
+  const [tpl, rowsImg] = await Promise.all([loadImg(L.tpl), loadImg(L.rows), resFont()]);
+  const S = L.size, cv = document.createElement("canvas");
   cv.width = S; cv.height = S;
   const ctx = cv.getContext("2d");
   ctx.drawImage(tpl, 0, 0, S, S);
   const FONT = (w, px) => w + " " + px + 'px "Carlito", Calibri, "Segoe UI", Arial, sans-serif';
-  const INK = "#4b1a08", YELLOW = "#f7d21e", WHITE = "#ffffff";
-  /* round number, after "Round" in the title brush stroke, in the title's brush lettering */
+  /* round number, two digits as on the posts */
   const digits = (String(d.round.name).match(/\d+/) || [""])[0];
   if (digits) {
     const no = digits.padStart(2, "0");
-    const BRUSH = px => px + 'px "Kaushan Script", "Brush Script MT", cursive';
-    ctx.font = BRUSH(fitSize(ctx, BRUSH, no, 100, 112, 60));
     ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
-    ctx.fillStyle = YELLOW; ctx.strokeStyle = YELLOW; ctx.lineWidth = 3.5; ctx.lineJoin = "round";
-    ctx.strokeText(no, 1020, 286); ctx.fillText(no, 1020, 286);
-  }
-  const rows = d.rows, n = rows.length;
-  /* rows: the post's size for its 14 rows, shrinking when more must fit and growing a little when fewer */
-  const area = RES_IMG.bottom - RES_IMG.top, unit = RES_IMG.pitch * (n - 1) + RES_IMG.cutH;
-  const k = Math.min(1.2, area / unit), pitch = RES_IMG.pitch * k;   /* k is 1 at the post's size */
-  const top = RES_IMG.top;
-  const runs = list => list.length ? list.map(i => i.score).join(" & ") : "";
-  rows.forEach((r, i) => {
-    const y = top + pitch * i, h = RES_IMG.cutH * k, cy = y + h / 2 + 1;
-    const look = r.outcome in RES_IMG.sprite ? r.outcome : "other";
-    ctx.drawImage(rowsImg, 0, RES_IMG.sprite[look] * RES_IMG.rowH + RES_IMG.cutY, RES_IMG.rowW, RES_IMG.cutH, RES_IMG.rowX, y, RES_IMG.rowW, h);
-    ctx.textBaseline = "middle";
-    const text = (t, x, w, align, weight, color, max) => {
-      if (!t) return;
-      ctx.textAlign = align; ctx.fillStyle = color;
-      ctx.font = FONT(weight, fitSize(ctx, px => FONT(weight, px), t, w, Math.round(max * k), Math.round(14 * k)));
-      if (weight === 400) { ctx.strokeStyle = color; ctx.lineWidth = 0.7 * k; ctx.strokeText(t, x, cy); } /* the post's semibold */
-      ctx.fillText(t, x, cy);
-    };
-    text(String(i + 1), 86, 50, "center", 700, WHITE, 28);
-    text(shortGrade(r.grade).replace(/\s*\(\s*/g, " ( ").replace(/\s*\)/g, " )"), 132, 170, "left", 700, YELLOW, 29);
-    const noScores = r.outcome === "bye" || r.outcome === "upcoming" || r.outcome === "pending";
-    if (r.outcome !== "bye") {
-      if (!noScores) text(runs(r.us) || "Yet to bat", 415, 196, "center", 400, INK, 31);
-      text(r.them.name, 535, 246, "left", 400, INK, 31);
-      if (!noScores) text(runs(r.them.innings) || "Yet to bat", 895, 194, "center", 400, INK, 31);
+    if (kind === "senior") { /* after "Round" in the title brush stroke, in the title's brush lettering */
+      const BRUSH = px => px + 'px "Kaushan Script", "Brush Script MT", cursive';
+      ctx.font = BRUSH(fitSize(ctx, BRUSH, no, 100, 112, 60));
+      ctx.fillStyle = ctx.strokeStyle = "#f7d21e"; ctx.lineWidth = 3.5; ctx.lineJoin = "round";
+      ctx.strokeText(no, 1020, 286); ctx.fillText(no, 1020, 286);
+    } else { /* after "ROUND" on the yellow brush, in its block lettering */
+      const BLOCK = px => px + 'px "Black Ops One", Impact, "Arial Black", sans-serif';
+      ctx.font = BLOCK(58);                      /* as tall as "ROUND", narrowed to the post's letter width */
+      const sx = Math.min(0.8, 64 / ctx.measureText(no).width);
+      ctx.save(); ctx.translate(600, 265); ctx.scale(sx, 1);
+      ctx.fillStyle = "#4a1c08"; ctx.fillText(no, 0, 0); ctx.restore();
     }
-    text(RES_WORD[r.outcome] || OUTCOME_LABEL[r.outcome] || r.outcome, 1100, 178, "center", 700, look === "drawn" ? "#1c0100" : WHITE, 29);
+  }
+  /* rows: the post's size for its own row count, shrinking when more must fit and growing a little when fewer */
+  const rows = d.rows, n = rows.length;
+  const area = L.bottom - L.top, unit = L.pitch * (n - 1) + L.cutH;
+  const k = Math.min(L.grow, area / unit), pitch = L.pitch * k;   /* k is 1 at the post's size */
+  const runs = list => list.length ? list.map(i => i.score).join(" & ") : "";
+  /* each row's texts by column, then one size per column (the largest at which every row's text fits) so the table reads evenly */
+  const cells = rows.map((r, i) => {
+    let team = shortGrade(r.grade);
+    team = kind === "junior" ? team.replace(/\s*\([^)]*\)/g, "").trim()            /* no coach name */
+                             : team.replace(/\s*\(\s*/g, " ( ").replace(/\s*\)/g, " )");
+    const noScores = r.outcome === "bye" || r.outcome === "upcoming" || r.outcome === "pending", bye = r.outcome === "bye";
+    return {
+      num: String(i + 1), team,
+      us: bye || noScores ? "" : runs(r.us) || "Yet to bat",
+      them: bye ? "" : r.them.name,
+      theirs: bye || noScores ? "" : runs(r.them.innings) || "Yet to bat",
+      result: L.words[r.outcome] || RES_WORD[r.outcome] || OUTCOME_LABEL[r.outcome] || r.outcome
+    };
+  });
+  const COLS = {
+    num: { ...L.num, weight: 700, size: L.num.size },
+    team: { ...L.team },
+    us: { ...L.us, weight: L.textWeight, size: L.textSize },
+    them: { align: "left", ...L.them, weight: L.textWeight, size: L.textSize },
+    theirs: { ...L.theirs, weight: L.textWeight, size: L.textSize },
+    result: { ...L.result, weight: 700, size: 29 }
+  };
+  const kt = Math.min(k, 1.1);                     /* text grows less than the rows do */
+  for (const [key, c] of Object.entries(COLS)) {
+    c.px = Math.round(c.size * kt);
+    for (const cell of cells) if (cell[key]) c.px = Math.min(c.px, fitSize(ctx, px => FONT(c.weight, px), cell[key], c.w, c.px, Math.round(14 * k)));
+    c.px = Math.max(c.px, Math.round(c.size * kt * 0.88));   /* one very long name shrinks on its own rather than the whole column */
+  }
+  rows.forEach((r, i) => {
+    const y = L.top + pitch * i, h = L.cutH * k, cy = y + h / 2 + 1;
+    const look = r.outcome in RES_SPRITE ? r.outcome : "other";
+    ctx.drawImage(rowsImg, 0, RES_SPRITE[look] * L.rowH + L.cutY, L.rowW, L.cutH, L.rowX, y, L.rowW, h);
+    ctx.textBaseline = "middle";
+    for (const [key, c] of Object.entries(COLS)) {
+      const t = cells[i][key];
+      if (!t) continue;
+      const color = key === "num" ? "#ffffff" : key === "team" ? c.color : key === "result" ? (look === "drawn" ? "#1c0100" : "#ffffff") : L.ink;
+      ctx.textAlign = c.align || "center"; ctx.fillStyle = color;
+      ctx.font = FONT(c.weight, fitSize(ctx, px => FONT(c.weight, px), t, c.w, c.px, Math.round(14 * k)));
+      if (c.weight === 400) { ctx.strokeStyle = color; ctx.lineWidth = 0.7 * k; ctx.strokeText(t, c.x, cy); } /* the post's semibold */
+      ctx.fillText(t, c.x, cy);
+    }
   });
   return new Promise((ok, bad) => cv.toBlob(b => b ? ok(b) : bad(new Error("Could not make the image.")), "image/png"));
 }
@@ -3433,7 +3476,7 @@ function scoresTab(prefix, kind, word) {
     const btn = e.currentTarget, label = btn.textContent;
     btn.disabled = true; btn.textContent = "Making image…";
     try {
-      const blob = await resultsImage(state.data);
+      const blob = await resultsImage(state.data, kind);
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       a.download = "cheetahs-" + kind + "-results-" + String(state.data.round.name).toLowerCase().replace(/[^a-z0-9]+/g, "-") + ".png";
