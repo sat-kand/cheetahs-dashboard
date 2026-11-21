@@ -1505,7 +1505,7 @@ function mondayOf(ymd) {
    (not just by date) because a junior round can mix one- and two-day games across age groups: one grade's game
    can still be running while another's, in the same week, is long since over.
    api adds getTeamMatchesFresh(teamId) and getScorecardFresh(matchId), which are not remembered between refreshes. */
-async function buildScores(api, now, kind) {
+async function buildScores(api, now, kind, opts) {
   const K = SCORE_KINDS[kind || "senior"];
   if (kind === "junior") await loadJuniorCoaches();
   /* PlayHQ (both Senior and Junior Scores are PlayHQ-backed) gives several concurrent season
@@ -1648,6 +1648,11 @@ async function buildScores(api, now, kind) {
   const dated = picked.filter(e => e.first);
   const round = { name, season, first: dated.map(e => e.first).sort()[0], last: dated.map(e => e.last).sort().pop() };
   const rows = picked.map(e => e.row).sort((a, b) => a.rank - b.rank || a.grade.localeCompare(b.grade) || a.them.name.localeCompare(b.them.name));
+  /* show the round straight away from the fixtures (scores, results, venues), then fill in the scorecards below,
+     which are the slow part when PlayHQ is busy */
+  if (opts && opts.onPartial) {
+    try { opts.onPartial({ round, failedTeams, rows: rows.map(r => ({ ...r, them: { ...r.them }, outcome: r.outcome === "finished" ? outcomeFromScores(r.us, r.them.innings) : r.outcome })) }); } catch (e) { /* just wait for the full answer */ }
+  }
   /* the scorecard has the overs of every innings; keep the fixture figures if it cannot be read */
   if (api.getScorecard) {
     const cards = new Map(); /* one lookup per match, even when two of our teams share it */
@@ -3314,7 +3319,7 @@ function scoresTab(prefix, kind, word) {
     btn.disabled = true; btn.textContent = "Refreshing…";
     state.state = "loading"; render();
     try {
-      const data = await buildScores(phq(), new Date(), kind);
+      const data = await buildScores(phq(), new Date(), kind, { onPartial: part => { if (run === runNo) { state.data = part; render(); } } });
       if (run !== runNo) return;
       state = { state: "ok", data, at: new Date().toISOString() };
     } catch (e) {
