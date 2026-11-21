@@ -311,6 +311,7 @@ h1 { font-size: 1.55rem; line-height: 1.1; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .chip { font-size: 0.75rem; font-weight: 700; padding: 1px 9px; border-radius: 999px; background: var(--pill-bg); color: var(--pill-ink); }
 .chip.won { background: #1f7a3d; color: #fff; } .chip.lost { background: #b3261e; color: #fff; }
+.chip.progress { background: #fff; color: #b3261e; box-shadow: inset 0 0 0 1.5px #b3261e; }
 .scores { border-top: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .srow { padding: 9px 12px; gap: 3px; }
 .srow .g { font-family: var(--font-body); font-size: 0.72rem; font-weight: 700; background: var(--gold); color: var(--brand); border-radius: 4px; padding: 1px 6px; align-self: center; }
@@ -1694,6 +1695,8 @@ async function buildScores(api, now, kind, opts) {
     } catch (e) { /* leave it as PlayHQ has it */ }
   });
   for (const r of rows) if (r.outcome === "finished") r.outcome = outcomeFromScores(r.us, r.them.innings);
+  /* Started, but neither PlayHQ nor Play Cricket has any live score: say "No scores yet" rather than "In progress / Yet to bat". */
+  for (const r of rows) if (r.outcome === "progress" && !r.us.length && !(r.them.innings || []).length) r.outcome = "pending";
   /* An upcoming game whose team sheet for our side has no players yet gets flagged. A lookup that fails is left unflagged
      rather than guessed at. */
   if (api.getScorecard) {
@@ -3232,7 +3235,7 @@ $("a-copy").addEventListener("click", async e => {
 
 
 /* ---- Scores tabs (seniors and juniors) ---- */
-const OUTCOME_LABEL = { bye: "Bye", pending: "No score yet", upcoming: "Upcoming", progress: "In progress", won: "Won", lost: "Lost", tied: "Tied", drawn: "Drawn", abandoned: "Abandoned", finished: "Completed" };
+const OUTCOME_LABEL = { bye: "Bye", pending: "No scores yet", upcoming: "Upcoming", progress: "In progress", won: "Won", lost: "Lost", tied: "Tied", drawn: "Drawn", abandoned: "Abandoned", finished: "Completed" };
 /* "117 (49.3 ov) & 7-222 (60 ov)", or "Yet to bat" */
 function inningsNode(list) {
   const sc = document.createElement("span");
@@ -3269,7 +3272,7 @@ function scoresTab(prefix, kind, word) {
     }
     title.textContent = d.round.name + " · " + xiiRounds(d.round);
     const tally = k => d.rows.filter(r => r.outcome === k).length;
-    const chips = [["won", tally("won") + " won"], ["lost", tally("lost") + " lost"], ["", (tally("upcoming") + tally("pending")) + " next"], ["", tally("bye") + " bye"]].filter(c => !/^0 /.test(c[1]));
+    const chips = [["won", tally("won") + " won"], ["lost", tally("lost") + " lost"], ["progress", tally("progress") + " in progress"], ["pending", tally("pending") + " no scores yet"], ["", tally("upcoming") + " next"], ["", tally("bye") + " bye"]].filter(c => !/^0 /.test(c[1]));
     if (chips.length) { const cw = document.createElement("div"); cw.className = "chips"; cw.innerHTML = chips.map(c => '<span class="chip ' + c[0] + '">' + c[1] + "</span>").join(""); title.appendChild(cw); }
     if (state.state === "error") note.textContent = "Could not refresh. Press Refresh to try again.";
     else if (d.failedTeams) note.textContent = "Could not read " + plural(d.failedTeams, "team", "teams") + ", so some matches may be missing. Press Refresh to try again.";
