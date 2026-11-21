@@ -2209,7 +2209,7 @@ function makeApi() {
     }),
     getMatch: id => once("match" + id, () => getJSON("/scores/matches/" + id, keepIfDone(7 * DAY_MS))),
     getPerf: (pid, sid) => once("perf" + pid + sid, async () => getJSON("/scores/players/" + pid + "/match-performances?seasonId=" + sid + "&matchTypeId=&ageGroupCategoryId=&jsconfig=eccn%3Atrue",
-      (await isPast(sid)) ? keepFor(30 * DAY_MS) : null))
+      (await isPast(sid)) ? keepFor(30 * DAY_MS) : keepFor(3600 * 1000))) /* this season's figures change only when a game is finalised: kept an hour */
   };
 }
 
