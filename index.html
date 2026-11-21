@@ -2694,6 +2694,17 @@ function renderWatch() {
   }
 }
 
+/* The header's status line describes the tab that is open: when that tab's data was loaded (each tab keeps its own
+   time, so a Refresh on one tab doesn't make another look newer than it is), or that it is loading. */
+const TAB_AT = {}, TAB_FAILED = {};
+function tabStatus() {
+  const p = [...document.querySelectorAll(".panel")].find(x => !x.hidden);
+  if (!p) return;
+  const name = p.id.replace(/^panel-/, ""), b = p.querySelector(".refresh");
+  if (b && b.disabled) return setStatus("loading");
+  if (name === "milestones" && TAB_FAILED.milestones && !TAB_AT[name]) return setStatus("error");
+  if (TAB_AT[name]) { asOf = TAB_AT[name]; setStatus("live"); } else $("status").textContent = "";
+}
 function setStatus(kind) {
   const el = $("status");
   if (kind === "loading") el.textContent = "Loading the latest data…";
@@ -2750,11 +2761,11 @@ async function refreshActivity(api) {
 }
 async function refresh() {
   const btn = $("refresh");
-  btn.disabled = true; btn.textContent = "Refreshing…"; setStatus("loading");
+  btn.disabled = true; btn.textContent = "Refreshing…";
   const api = pcApi();
   await Promise.all(sections.map(sec => refreshSection(sec, api)));
-  if (sections.every(sec => sec.state === "error")) setStatus("error");
-  else { asOf = new Date().toISOString(); setStatus("live"); }
+  TAB_FAILED.milestones = sections.every(sec => sec.state === "error");
+  if (!TAB_FAILED.milestones) asOf = new Date().toISOString();
   await refreshActivity(api);
   btn.disabled = false; btn.textContent = "Refresh";
 }
@@ -3504,15 +3515,16 @@ document.querySelector(".tabs").addEventListener("keydown", e => {
     const t = target();
     if (!t || t.disabled) return;
     refreshNo++;
-    pending = t; setStatus("loading"); hb.classList.add("busy");
+    pending = t; hb.classList.add("busy");
     t.click();
-    if (!t.disabled) { pending = null; asOf = new Date().toISOString(); setStatus("live"); hb.classList.remove("busy"); } /* nothing to wait for */
+    if (!t.disabled) { pending = null; hb.classList.remove("busy"); } /* nothing to wait for */
+    tabStatus();
   });
   const sync = () => {
     const t = target();
     hb.classList.toggle("busy", !!(t && t.disabled));
-    /* the load that the header press started has finished: show the new time, whichever tab it was */
-    if (pending && !pending.disabled) { pending = null; asOf = new Date().toISOString(); setStatus("live"); }
+    if (pending && !pending.disabled) pending = null;
+    tabStatus();
   };
   /* a tab opened after a Refresh it hasn't caught up with reloads quietly, showing what it had meanwhile */
   const catchUp = () => setTimeout(() => {
@@ -3522,6 +3534,12 @@ document.querySelector(".tabs").addEventListener("keydown", e => {
   const mo = new MutationObserver(recs => {
     for (const r of recs) {
       if (r.attributeName === "disabled" && r.target.disabled) loadedAt.set(r.target.closest(".panel"), refreshNo);
+      /* a tab finished loading: that tab's own time (a failed load keeps the time of the data still shown) */
+      if (r.attributeName === "disabled" && !r.target.disabled) {
+        const name = r.target.closest(".panel").id.replace(/^panel-/, "");
+        const failed = name === "milestones" ? TAB_FAILED.milestones : /Could not (load|refresh)/.test(r.target.closest(".panel").textContent);
+        if (!failed) TAB_AT[name] = new Date().toISOString();
+      }
       if (r.attributeName === "hidden" && !r.target.hidden) catchUp();
     }
     sync();
