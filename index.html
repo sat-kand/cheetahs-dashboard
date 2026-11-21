@@ -2137,13 +2137,16 @@ async function getJSON(path, keep) {
     return j;
   })();
   PC_HTTP_CACHE.set(path, p);
+  PC_READ_AT.set(path, Date.now());
   p.catch(() => { if (PC_HTTP_CACHE.get(path) === p) PC_HTTP_CACHE.delete(path); });
   return p;
 }
 let PC_SHARED = null;
 function pcApi() { return PC_SHARED || (PC_SHARED = makeApi()); }
+const PC_READ_AT = new Map();
 function pcReset() {
-  for (const k of [...PC_HTTP_CACHE.keys()]) if (!PC_KEPT.has(k)) PC_HTTP_CACHE.delete(k);
+  const now = Date.now();
+  for (const k of [...PC_HTTP_CACHE.keys()]) if (!PC_KEPT.has(k) && now - (PC_READ_AT.get(k) || 0) > RECENT_MS) PC_HTTP_CACHE.delete(k);
   PC_SHARED = null;
 }
 const PC_DONE = /^(COMPLETED|ABANDONED|CANCELLED)/;
@@ -2312,6 +2315,7 @@ async function phqJSON(path, opts) {
   })();
   /* a fresh read also replaces what is remembered, so the other tabs use the newer copy */
   PHQ_HTTP_CACHE.set(path, p);
+  PHQ_READ_AT.set(path, Date.now());
   p.catch(() => { if (PHQ_HTTP_CACHE.get(path) === p) PHQ_HTTP_CACHE.delete(path); });
   return p;
 }
@@ -2320,8 +2324,13 @@ let PHQ_SHARED = null;
 function phq() { return PHQ_SHARED || (PHQ_SHARED = makePhqApi()); }
 /* Refresh drops what can still change (fixtures with games to come, unfinished games) and keeps what is final
    (season and team lists, finished games, past seasons' fixtures), so it re-reads only a few things. */
+/* A copy read in the last minute (by another tab's Refresh, say) is still current, so it is kept too: refreshing two
+   tabs one after the other reads each changing thing once, not twice. */
+const RECENT_MS = 60 * 1000;
+const PHQ_READ_AT = new Map();
 function phqReset() {
-  for (const k of [...PHQ_HTTP_CACHE.keys()]) if (!PHQ_KEPT.has(k)) PHQ_HTTP_CACHE.delete(k);
+  const now = Date.now();
+  for (const k of [...PHQ_HTTP_CACHE.keys()]) if (!PHQ_KEPT.has(k) && now - (PHQ_READ_AT.get(k) || 0) > RECENT_MS) PHQ_HTTP_CACHE.delete(k);
   PHQ_SHARED = null;
 }
 /* Every club team of the given seasons, fetched for all seasons at once. */
