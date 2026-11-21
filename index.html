@@ -1015,6 +1015,7 @@ function pcFindMatches(label, first) {
     /* senior grades ("Senior A Reserve" here, "A Reserve Grade" or "Parramatta Cheetahs A Reserve" there): same words once the
        filler words are dropped */
     const words = x => String(x || "").toLowerCase().replace(/\([^)]*\)/g, " ").replace(/division/g, "div").split(/[^a-z0-9]+/)
+      .map(w => /^res(erves?)?$/.test(w) ? "reserve" : w)
       .filter(w => w && !/^(seniors?|juniors?|grade|parramatta|cheetahs|ccc|cc|club|cricket|the|men|mens|first|xi)$/.test(w)).sort().join(" ");
     if (!teams.length && words(label)) teams = all.filter(t => words(t.name) === words(label));
     if (!teams.length && age(label)) { const same = all.filter(t => age(t.name) === age(label)); if (same.length === 1) teams = same; }
