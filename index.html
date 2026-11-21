@@ -447,7 +447,7 @@ h1 { font-size: 1.55rem; line-height: 1.1; }
       <button type="button" data-view="senior" aria-pressed="true">Senior</button>
       <button type="button" data-view="junior" aria-pressed="false">Junior</button>
     </div>
-      <div class="actions"><button type="button" class="refresh" id="h-refresh">Refresh</button><button type="button" class="copy" id="h-copy">Copy list</button></div>
+      <div class="actions"><button type="button" class="refresh" id="h-refresh">Refresh</button><button type="button" class="copy" id="h-copy">Copy list</button><button type="button" class="copy" id="h-img">Download 50s image</button></div>
     </div>
     <div data-hl-view="senior">
     <section class="block" aria-labelledby="h-hl100">
@@ -3196,6 +3196,83 @@ function hlText(view) {
   }
   return out.join("\n").trim();
 }
+/* ---- 50s social image: the club's 50s post (fifties-template.jpg, with its title line cleared and the real logo.png in
+   place of its redrawn one). Each bar is stamped from fifties-rows.png, a clean bar cut from the same post with a strip
+   of the dark board under it. Positions are in the template's 1254 x 1254 pixels. */
+const F50 = { size: 1254, x: 220, w: 842, barH: 90, gapH: 12, boardTop: 404, boardBottom: 1104, top: 411, area: 690, pitch: 85.7 };
+let F50_FONT = null;
+function f50Font() {
+  if (!F50_FONT) F50_FONT = (async () => {
+    const l = document.createElement("link");
+    l.rel = "stylesheet";
+    l.href = "https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@1,700;1,800&display=block";
+    document.head.appendChild(l);
+    await new Promise(r => { l.onload = r; l.onerror = r; });
+    await Promise.all(['italic 700 50px "Barlow Condensed"', 'italic 800 50px "Barlow Condensed"'].map(f => document.fonts.load(f).catch(() => {})));
+  })();
+  return F50_FONT;
+}
+function f50Items(d) { return (d && d.list ? d.list : []).filter(p => p.runs >= HL_MIN_RUNS && p.runs <= 99); }
+async function fiftiesImage(d) {
+  const items = f50Items(d);
+  if (!d || !d.round || !items.length) throw new Error("No 50s to draw.");
+  const [tpl, rowsImg] = await Promise.all([loadImg("fifties-template.jpg"), loadImg("fifties-rows.png"), f50Font()]);
+  const S = F50.size, cv = document.createElement("canvas");
+  cv.width = S; cv.height = S;
+  const ctx = cv.getContext("2d");
+  ctx.drawImage(tpl, 0, 0, S, S);
+  const F = (w, px) => "italic " + w + " " + px + 'px "Barlow Condensed", "Arial Narrow", Arial, sans-serif';
+  /* title on the yellow brush: "Round 4 (Senior) 50 Makers" */
+  const no = (String(d.round.name).match(/\d+/) || [""])[0];
+  const title = (no ? "Round " + no : d.round.name) + " (Senior) 50 Makers";
+  ctx.fillStyle = "#331a04"; ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+  ctx.font = F(700, fitSize(ctx, px => F(700, px), title, 640, 92, 40));
+  ctx.fillText(title, 688, 290);
+  /* the board: dark between the bars, then one bar per 50, as tall as the post's for 8, taller for fewer, shorter for more */
+  const n = items.length, k = Math.min(1.25, F50.area / (F50.pitch * (n - 1) + F50.barH));
+  const blockH = (F50.pitch * (n - 1) + F50.barH) * k, top = F50.top + (F50.area - blockH) / 2;
+  if (n < 8) { /* fewer bars than the post: a dark board in the club's brown and gold, so none of the post's own bars show */
+    const bx = 236, bw = 818, by = F50.boardTop + 2, bh = F50.boardBottom - F50.boardTop - 4;
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.55)"; ctx.shadowBlur = 24; ctx.shadowOffsetY = 6;
+    const g = ctx.createLinearGradient(0, by, 0, by + bh); g.addColorStop(0, "#3a1d06"); g.addColorStop(1, "#1f0e02");
+    ctx.fillStyle = g; ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 14); ctx.fill();
+    ctx.restore();
+    ctx.strokeStyle = "#e3ad2b"; ctx.lineWidth = 3; ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 14); ctx.stroke();
+  }
+  const namePx = [], figPx = [];
+  const label = p => p.name + " (" + shortGrade(p.grade) + ")", fig = p => p.runs + (p.notOut ? "*" : "");
+  items.forEach(p => { namePx.push(fitSize(ctx, px => F(700, px), label(p), 570, Math.round(50 * Math.min(k, 1.1)), 22)); figPx.push(fitSize(ctx, px => F(800, px), fig(p), 108, Math.round(66 * Math.min(k, 1.1)), 30)); });
+  const nameSize = Math.max(Math.min(...namePx), Math.round(44 * Math.min(k, 1.1))); /* one size for every name, unless one is far longer */
+  items.forEach((p, i) => {
+    const y = top + F50.pitch * k * i, h = F50.barH * k, cy = y + h / 2 + 2;
+    ctx.drawImage(rowsImg, 0, 0, F50.w, F50.barH, F50.x, y, F50.w, h);
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "left"; ctx.fillStyle = "#ffd447";
+    ctx.font = F(700, Math.min(nameSize, namePx[i] < nameSize ? namePx[i] : nameSize)); ctx.fillText(label(p), 298, cy);
+    ctx.textAlign = "center"; ctx.fillStyle = "#2a1402";
+    ctx.font = F(800, Math.min(...figPx)); ctx.fillText(fig(p), 962, cy + 1);
+  });
+  return new Promise((ok, bad) => cv.toBlob(b => b ? ok(b) : bad(new Error("Could not make the image.")), "image/png"));
+}
+$("h-img").addEventListener("click", async e => {
+  const btn = e.currentTarget, label = btn.textContent;
+  const d = hl.data && hl.data.senior;
+  btn.disabled = true; btn.textContent = "Making image…";
+  try {
+    if (!f50Items(d).length) throw new Error("none");
+    const blob = await fiftiesImage(d);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "cheetahs-50s-" + String(d.round.name).toLowerCase().replace(/[^a-z0-9]+/g, "-") + ".png";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+    btn.textContent = "Downloaded";
+  } catch (err) {
+    btn.textContent = d && d.round && !f50Items(d).length ? "No 50s this round" : d && d.round ? "Could not make image" : "Not loaded yet";
+  }
+  setTimeout(() => { btn.textContent = label; btn.disabled = false; }, 1600);
+});
 let hlRun = 0;
 async function loadHL() {
   const run = ++hlRun; /* a newer load replaces an older one still in flight */
@@ -3226,6 +3303,7 @@ document.querySelectorAll("#seg-hl button").forEach(b => b.addEventListener("cli
   hlView = b.dataset.view;
   document.querySelectorAll("#seg-hl button").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
   document.querySelectorAll("[data-hl-view]").forEach(el => { el.hidden = el.dataset.hlView !== hlView; });
+  $("h-img").hidden = hlView !== "senior"; /* the 50s image is a senior post */
 }));
 
 /* ---- Scorecard audit tab ---- */
