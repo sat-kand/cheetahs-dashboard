@@ -140,7 +140,7 @@ h3 {
 .seg button:hover:not([aria-pressed="true"]) { background: var(--hover); }
 .copy {
   font: inherit; font-size: 0.92rem; font-weight: 500;
-  padding: 8px 14px; border: 1px solid var(--line); border-radius: 6px;
+  padding: 8px 14px; white-space: nowrap; border: 1px solid var(--line); border-radius: 6px;
   background: var(--surface); color: var(--ink); cursor: pointer;
 }
 .copy:hover { background: var(--hover); }
@@ -487,7 +487,7 @@ h1 { font-size: 1.55rem; line-height: 1.1; }
   <div class="panel scores-panel" id="panel-scores" role="tabpanel" aria-labelledby="tab-scores">
     <div class="scores-head">
       <div class="scores-title" id="s-title">Loading the current round…</div>
-      <div class="actions"><button type="button" class="refresh" id="s-refresh">Refresh</button><button type="button" class="copy" id="s-copy">Copy scores</button></div>
+      <div class="actions"><button type="button" class="refresh" id="s-refresh">Refresh</button><button type="button" class="copy" id="s-copy">Copy scores</button><button type="button" class="copy" id="s-img">Download image</button></div>
     </div>
     <div id="s-note" class="bad snote"></div>
     <div class="scores" id="s-list"></div>
@@ -3261,6 +3261,76 @@ function fmtTime12(t) {
   const h = Number(m[1]);
   return ((h % 12) || 12) + ":" + m[2] + (h < 12 ? "am" : "pm");
 }
+/* ---- Senior results social image: the club's results template (results-template.jpg, the round-4 post with the
+   round number and table rows cleared) with this round drawn on. Each row is stamped from results-rows.png, four clean
+   rows cut from the same post (won, lost, drawn and a brown pill for anything else), so the table keeps the post's own
+   look. Fonts and images are fetched only when the button is pressed. Positions are in the template's 1254 x 1254 pixels. */
+const RES_IMG = { size: 1254, rowX: 40, rowW: 1175, rowH: 46, cutY: 2, cutH: 41, top: 479, bottom: 1046, pitch: 40.6, sprite: { won: 0, lost: 1, drawn: 2, other: 3 } };
+let RES_FONT = null;
+function resFont() {
+  if (!RES_FONT) RES_FONT = (async () => {
+    const l = document.createElement("link");
+    l.rel = "stylesheet";
+    l.href = "https://fonts.googleapis.com/css2?family=Carlito:wght@400;700&family=Kaushan+Script&display=block";
+    document.head.appendChild(l);
+    await new Promise(r => { l.onload = r; l.onerror = r; });
+    await Promise.all(['400 28px "Carlito"', '700 28px "Carlito"', '100px "Kaushan Script"'].map(f => document.fonts.load(f).catch(() => {})));
+  })();
+  return RES_FONT;
+}
+function loadImg(src) {
+  return new Promise((ok, bad) => { const im = new Image(); im.onload = () => ok(im); im.onerror = bad; im.src = src; });
+}
+const RES_WORD = { won: "WON", lost: "LOST", drawn: "Drawn", tied: "TIED", bye: "BYE", abandoned: "Abandoned", progress: "In progress", pending: "No scores", upcoming: "Upcoming" };
+async function resultsImage(d) {
+  if (!d || !d.round || !d.rows.length) throw new Error("No round to draw yet.");
+  const [tpl, rowsImg] = await Promise.all([loadImg("results-template.jpg"), loadImg("results-rows.png"), resFont()]);
+  const S = RES_IMG.size, cv = document.createElement("canvas");
+  cv.width = S; cv.height = S;
+  const ctx = cv.getContext("2d");
+  ctx.drawImage(tpl, 0, 0, S, S);
+  const FONT = (w, px) => w + " " + px + 'px "Carlito", Calibri, "Segoe UI", Arial, sans-serif';
+  const INK = "#4b1a08", YELLOW = "#f7d21e", WHITE = "#ffffff";
+  /* round number, after "Round" in the title brush stroke, in the title's brush lettering */
+  const digits = (String(d.round.name).match(/\d+/) || [""])[0];
+  if (digits) {
+    const no = digits.padStart(2, "0");
+    const BRUSH = px => px + 'px "Kaushan Script", "Brush Script MT", cursive';
+    ctx.font = BRUSH(fitSize(ctx, BRUSH, no, 100, 112, 60));
+    ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = YELLOW; ctx.strokeStyle = YELLOW; ctx.lineWidth = 3.5; ctx.lineJoin = "round";
+    ctx.strokeText(no, 1020, 286); ctx.fillText(no, 1020, 286);
+  }
+  const rows = d.rows, n = rows.length;
+  /* rows: the post's size for its 14 rows, shrinking when more must fit and growing a little when fewer */
+  const area = RES_IMG.bottom - RES_IMG.top, unit = RES_IMG.pitch * (n - 1) + RES_IMG.cutH;
+  const k = Math.min(1.2, area / unit), pitch = RES_IMG.pitch * k;   /* k is 1 at the post's size */
+  const top = RES_IMG.top;
+  const runs = list => list.length ? list.map(i => i.score).join(" & ") : "";
+  rows.forEach((r, i) => {
+    const y = top + pitch * i, h = RES_IMG.cutH * k, cy = y + h / 2 + 1;
+    const look = r.outcome in RES_IMG.sprite ? r.outcome : "other";
+    ctx.drawImage(rowsImg, 0, RES_IMG.sprite[look] * RES_IMG.rowH + RES_IMG.cutY, RES_IMG.rowW, RES_IMG.cutH, RES_IMG.rowX, y, RES_IMG.rowW, h);
+    ctx.textBaseline = "middle";
+    const text = (t, x, w, align, weight, color, max) => {
+      if (!t) return;
+      ctx.textAlign = align; ctx.fillStyle = color;
+      ctx.font = FONT(weight, fitSize(ctx, px => FONT(weight, px), t, w, Math.round(max * k), Math.round(14 * k)));
+      if (weight === 400) { ctx.strokeStyle = color; ctx.lineWidth = 0.7 * k; ctx.strokeText(t, x, cy); } /* the post's semibold */
+      ctx.fillText(t, x, cy);
+    };
+    text(String(i + 1), 86, 50, "center", 700, WHITE, 28);
+    text(shortGrade(r.grade).replace(/\s*\(\s*/g, " ( ").replace(/\s*\)/g, " )"), 132, 170, "left", 700, YELLOW, 29);
+    const noScores = r.outcome === "bye" || r.outcome === "upcoming" || r.outcome === "pending";
+    if (r.outcome !== "bye") {
+      if (!noScores) text(runs(r.us) || "Yet to bat", 415, 196, "center", 400, INK, 31);
+      text(r.them.name, 535, 246, "left", 400, INK, 31);
+      if (!noScores) text(runs(r.them.innings) || "Yet to bat", 895, 194, "center", 400, INK, 31);
+    }
+    text(RES_WORD[r.outcome] || OUTCOME_LABEL[r.outcome] || r.outcome, 1100, 178, "center", 700, look === "drawn" ? "#1c0100" : WHITE, 29);
+  });
+  return new Promise((ok, bad) => cv.toBlob(b => b ? ok(b) : bad(new Error("Could not make the image.")), "image/png"));
+}
 function scoresTab(prefix, kind, word) {
   let state = { state: "idle", data: null, at: null };
   let runNo = 0;
@@ -3359,6 +3429,22 @@ function scoresTab(prefix, kind, word) {
     }
   }
   $(prefix + "-refresh").addEventListener("click", () => { phqReset(); load(); });
+  if ($(prefix + "-img")) $(prefix + "-img").addEventListener("click", async e => {
+    const btn = e.currentTarget, label = btn.textContent;
+    btn.disabled = true; btn.textContent = "Making image…";
+    try {
+      const blob = await resultsImage(state.data);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "cheetahs-" + kind + "-results-" + String(state.data.round.name).toLowerCase().replace(/[^a-z0-9]+/g, "-") + ".png";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+      btn.textContent = "Downloaded";
+    } catch (err) {
+      btn.textContent = state.data && state.data.round ? "Could not make image" : "No round yet";
+    }
+    setTimeout(() => { btn.textContent = label; btn.disabled = false; }, 1600);
+  });
   $(prefix + "-copy").addEventListener("click", async e => {
     const btn = e.currentTarget;
     try { await navigator.clipboard.writeText(text()); btn.textContent = "Copied"; }
