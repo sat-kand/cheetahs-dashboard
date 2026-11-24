@@ -2567,7 +2567,10 @@ function phqAdaptScorecard(d) {
       totalCatches: stat(a.statistics, "TOTAL_CATCHES"),
       keeperCatches: stat(a.statistics, "CATCHES_AS_WICKET_KEEPER"),
       stumpings: (shared || []).filter(s => s.type === "STUMPED" && (s.appearances || []).some(x => x.role === "FIELDING" && x.id === a.id)).length,
-      runOuts: (shared || []).filter(s => s.type === "RUN_OUT" && (s.appearances || []).some(x => x.role === "FIELDING" && x.id === a.id)).length
+      /* PlayHQ's own per-player run-out total (assisted and unassisted); the shared-event list below only names the fielder
+         on some scorecards, so the larger of the two is used */
+      runOuts: Math.max(stat(a.statistics, "TOTAL_RUN_OUTS"),
+        (shared || []).filter(s => s.type === "RUN_OUT" && (s.appearances || []).some(x => x.role === "FIELDING" && x.id === a.id)).length)
     }));
     innings.push({
       battingTeamId: battingTeam.id, inningsNumber: already + 1,
