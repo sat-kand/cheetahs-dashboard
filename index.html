@@ -1388,6 +1388,17 @@ function auditTeam(sc, clubTeamId, opts) {
         else if (/stump/i.test(type)) stumped++;
         else if (/run out/i.test(type)) runOut++;
       }
+      /* Wickets credited to our bowlers against the opponents' wickets that fall to a bowler (everything except run outs
+         and the odd retired-out batter). Checked from the opponents' batting card when it is filled in. */
+      const bowlWkts = bowling.reduce((a, x) => a + num(x.wicketsTaken), 0);
+      const dismissed = batting.filter(x => x.dismissalType);
+      if (dismissed.length) {
+        const byBowler = dismissed.filter(x => /^(caught|bowled|stumped|lbw)$/i.test(String(x.dismissalType))).length;
+        const generic = dismissed.filter(x => String(x.dismissalType).toLowerCase() === "out").length;
+        if (bowlWkts > byBowler + generic || (!generic && bowlWkts < byBowler)) {
+          note("bowling", "our bowlers are credited with " + bowlWkts + (bowlWkts === 1 ? " wicket" : " wickets") + ", but the opponents' scorecard has " + byBowler + " out to a bowler" + (runOut ? " and " + runOut + " run out" : "") + " (" + dismissed.length + " out in all).");
+        }
+      }
       const mineFielders = fielding.filter(f => !ourIds.size || ourIds.has(f.participantId));
       const cc = mineFielders.reduce((a, f) => a + num(f.totalCatches != null ? f.totalCatches : num(f.catches) + num(f.wicketKeeperCatches)), 0);
       const cs = mineFielders.reduce((a, f) => a + num(f.stumpings), 0);
