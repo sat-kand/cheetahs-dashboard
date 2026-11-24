@@ -2318,6 +2318,12 @@ function phqClearCache() { PHQ_HTTP_CACHE.clear(); }
    Refresh calls phqReset(), which drops only what can still change and keeps the rest. */
 const PHQ_STORE = "phq-v1";
 const PHQ_KEEP_MS = 12 * 3600 * 1000;
+/* Scorers often correct a finished game in the days after it, so a game played in the last 7 days is "recent": its saved
+   copy is only trusted for 30 minutes, and Refresh always reads it again. Older games are kept as before. */
+const PHQ_RECENT_GAME_MS = 7 * 86400 * 1000, PHQ_RECENT_KEEP_MS = 30 * 60 * 1000;
+let PHQ_RECHECK = false; /* set by Refresh */
+const phqRecentGame = (path, j) => /\/summary$/.test(path) && ((((j && j.data) || j || {}).schedule) || [])
+  .some(x => Date.now() - new Date(x.dateTime).getTime() < PHQ_RECENT_GAME_MS);
 const phqStorable = path => /\/(seasons|teams|grades)(\?cursor=[^&]*)?$/.test(path) || /\/games\/[^/]+\/summary$/.test(path) || /^\/v1\/teams\/[^/?]+\/fixture/.test(path);
 /* A team's fixture list is kept only once every game in it is over (a past season's team); a current team's list
    always has games still to come, so it is fetched each visit. */
@@ -2334,8 +2340,11 @@ async function phqStoreGet(path, stale) {
     const r = await c.match(PHQ_PROXY_BASE + path);
     if (!r) return null;
     /* an expired copy is still good enough when PlayHQ itself is down */
-    if (!stale && Date.now() - Number(r.headers.get("x-saved") || 0) > PHQ_KEEP_MS) return null;
-    return await r.json();
+    const age = Date.now() - Number(r.headers.get("x-saved") || 0);
+    if (!stale && age > PHQ_KEEP_MS) return null;
+    const j = await r.json();
+    if (!stale && phqRecentGame(path, j) && (PHQ_RECHECK || age > PHQ_RECENT_KEEP_MS)) return null;
+    return j;
   } catch (e) { return null; }
 }
 const PHQ_LAST_GOOD = new Map(); /* the last good answer for each path this visit, used when a later read fails */
@@ -2357,7 +2366,7 @@ async function fetchRetry(url) {
 const PHQ_KEPT = new Set(); /* paths whose answer is final, so Refresh leaves them alone */
 function phqStorePut(path, text, j) {
   try {
-    if (phqStorable(path) && phqFinished(path, j)) PHQ_KEPT.add(path);
+    if (phqStorable(path) && phqFinished(path, j) && !phqRecentGame(path, j)) PHQ_KEPT.add(path);
     if (!phqStorable(path) || !window.caches || !phqFinished(path, j)) return;
     caches.open(PHQ_STORE).then(c => c.put(PHQ_PROXY_BASE + path, new Response(text, { headers: { "Content-Type": "application/json", "x-saved": String(Date.now()) } }))).catch(() => {});
   } catch (e) { /* storage unavailable: memory only */ }
@@ -2366,7 +2375,7 @@ async function phqJSON(path, opts) {
   const fresh = opts && opts.fresh;
   if (!fresh && PHQ_HTTP_CACHE.has(path)) return PHQ_HTTP_CACHE.get(path);
   const p = (async () => {
-    if (!fresh) { const kept = await phqStoreGet(path); if (kept) { if (phqFinished(path, kept)) PHQ_KEPT.add(path); return kept; } }
+    if (!fresh) { const kept = await phqStoreGet(path); if (kept) { if (phqFinished(path, kept) && !phqRecentGame(path, kept)) PHQ_KEPT.add(path); return kept; } }
     try {
       const t = await fetchRetry(PHQ_PROXY_BASE + path);
       const j = t ? JSON.parse(t) : {};
@@ -2397,6 +2406,7 @@ const RECENT_MS = 60 * 1000;
 const PHQ_READ_AT = new Map();
 function phqReset() {
   const now = Date.now();
+  PHQ_RECHECK = true;
   for (const k of [...PHQ_HTTP_CACHE.keys()]) if (!PHQ_KEPT.has(k) && now - (PHQ_READ_AT.get(k) || 0) > RECENT_MS) PHQ_HTTP_CACHE.delete(k);
   PHQ_SHARED = null;
 }
