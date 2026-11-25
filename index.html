@@ -2187,7 +2187,7 @@ function crossings(data, win, cfg) {
    The Milestones and Records Refresh buttons call pcReset(), which drops all of it. */
 const PC_HTTP_CACHE = new Map();
 const PC_KEPT = new Set(); /* paths whose answer is kept between visits, so Refresh leaves them alone */
-const PC_STORE = "pc-v1";
+const PC_STORE = "pc-v2"; /* bumped to drop every device's older saved copies once */
 const DAY_MS = 24 * 3600 * 1000;
 async function pcStoreGet(path) {
   try {
@@ -2327,7 +2327,8 @@ function phqClearCache() { PHQ_HTTP_CACHE.clear(); }
      (12 hours) and the summaries of finished games (12 hours). Fixtures and unfinished games are never kept between
      visits, so scores in progress are always current.
    Refresh calls phqReset(), which drops only what can still change and keeps the rest. */
-const PHQ_STORE = "phq-v1";
+const PHQ_STORE = "phq-v2";
+try { if (window.caches) ["pc-v1", "phq-v1"].forEach(k => caches.delete(k)); } catch (e) { /* nothing to clear */ }
 const PHQ_KEEP_MS = 12 * 3600 * 1000;
 /* Scorers often correct a finished game in the days after it, so a game played in the last 7 days is "recent": its saved
    copy is only trusted for 30 minutes, and Refresh always reads it again. Older games are kept as before. */
