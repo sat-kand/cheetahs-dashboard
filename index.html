@@ -475,6 +475,11 @@ h1 { font-size: 1.55rem; line-height: 1.1; }
       <div class="summary" id="hm-summary">Loading the most recently played round…</div>
       <div class="grid xii-grid" id="hm-grid"></div>
     </section>
+    <section class="block" aria-labelledby="h-hlp">
+      <h2 id="h-hlp">Senior 60+ partnerships of the round</h2>
+      <div class="summary" id="hp-summary">Loading the most recently played round…</div>
+      <div class="grid xii-grid" id="hp-grid"></div>
+    </section>
     <section class="block" aria-labelledby="h-hldeb">
       <h2 id="h-hldeb">Senior debutants of the round</h2>
       <div class="summary" id="hdeb-summary">Checking each player's history for a first senior match…</div>
@@ -903,7 +908,23 @@ async function buildFifties(api, now) {
   if (!round) return { round: null, failedTeams };
   const roster = await roundRoster(api, round, teamIds);
   let failed = 0;
-  const list = [], wkts = [], maids = [];
+  const list = [], wkts = [], maids = [], parts = [];
+  /* partnerships come from each match's scorecard, the same PlayHQ read the squads above already made (kept in memory) */
+  await mapLimit([...round.matches.keys()], 6, async id => {
+    let sc; try { sc = await api.getScorecard(id); } catch (x) { failed++; return; }
+    const status = (round.matches.get(id) || {}).status;
+    for (const inn of (sc && sc.innings) || []) {
+      if (!teamIds.has(inn.battingTeamId)) continue;
+      for (const pr of inn.partnerships || []) {
+        if (pr.runs < HL_MIN_PARTNERSHIP) continue;
+        const A = roster.get(pr.a), B = roster.get(pr.b);
+        if (!A || !B) continue;
+        const grade = A.grades.get(id) || teamIds.get(inn.battingTeamId);
+        parts.push({ id: id + "|" + pr.wicket, names: [A.name, B.name], runs: pr.runs, wicket: pr.wicket, unbroken: pr.unbroken, grade, rank: gradeRank(grade), live: NOT_FINISHED.has(String(status || "").toUpperCase()) });
+      }
+    }
+  });
+  parts.sort((a, b) => b.runs - a.runs || a.rank - b.rank || a.names[0].localeCompare(b.names[0]));
   await mapLimit([...roster.values()], 6, async e => {
     let perf;
     try { perf = await api.getPerf(e.id, round.seasonId); } catch (x) { failed++; return; }
@@ -931,7 +952,7 @@ async function buildFifties(api, now) {
   list.sort(hlOrder);
   wkts.sort(hlBowlOrder);
   maids.sort((a, b) => b.maidens - a.maidens || a.balls - b.balls || a.rank - b.rank || a.name.localeCompare(b.name));
-  return { round: { name: round.name, season: round.season, first: round.first, last: round.last, matches: round.matches.size }, list, wkts, maids, failed, failedTeams };
+  return { round: { name: round.name, season: round.season, first: round.first, last: round.last, matches: round.matches.size }, list, wkts, maids, parts, failed, failedTeams };
 }
 /* ---- Highlights: senior debutants of the round ----
    PlayHQ's API has no player history, so this reads Play Cricket (makeApi), which holds every season back to 2014/15
@@ -981,6 +1002,7 @@ function hlOrder(a, b) {
   return a.rank - b.rank || String(a.grade).localeCompare(String(b.grade)) || b.runs - a.runs || (b.notOut - a.notOut) || a.name.localeCompare(b.name);
 }
 const HL_MIN_WKTS = 4;
+const HL_MIN_PARTNERSHIP = 60;
 /* Bowling innings with at least minWkts wickets in one match performance; base carries the player and grade. */
 function hlHauls(m, base, minWkts) {
   const bowls = m.bowlingStatistics || [];
@@ -2596,7 +2618,30 @@ function phqAdaptScorecard(d) {
       runOuts: Math.max(stat(a.statistics, "TOTAL_RUN_OUTS"),
         (shared || []).filter(s => s.type === "RUN_OUT" && (s.appearances || []).some(x => x.role === "FIELDING" && x.id === a.id)).length)
     }));
+    /* Partnerships rebuilt from the fall of wickets (team runs when each wicket fell) and the batting order: the two at the
+       crease start as the first two in the order, the one who is out is replaced by the next in the order, and what is
+       left at the end (not out, or the innings closed) is the unbroken last pair. */
+    const partnerships = (() => {
+      const order = (battingTeam.appearances || []).filter(a => a.status && a.status !== "DID_NOT_BAT")
+        .sort((x, y) => (Number(x.displayOrder) || 0) - (Number(y.displayOrder) || 0)).map(a => a.id);
+      const fow = (battingTeam.fallOfWickets || []).slice().sort((x, y) => (Number(x.sequenceNo) || 0) - (Number(y.sequenceNo) || 0));
+      if (order.length < 2) return [];
+      let pair = [order[0], order[1]], next = 2, prev = 0;
+      const out = [];
+      for (const f of fow) {
+        const runs = Number(f.runs) || 0;
+        if (!pair.includes(f.appearanceId)) return out; /* the record doesn't line up with the batting order: stop rather than guess */
+        out.push({ runs: runs - prev, a: pair[0], b: pair[1], wicket: Number(f.sequenceNo) || out.length + 1, unbroken: false });
+        prev = runs;
+        pair = [pair.find(x => x !== f.appearanceId), order[next++]];
+        if (!pair[1]) return out;
+      }
+      const total = stat(battingTeam.statistics, "TOTAL_SCORE") || stat(battingTeam.statistics, "TOTALS");
+      if (pair[0] && pair[1] && total > prev) out.push({ runs: total - prev, a: pair[0], b: pair[1], wicket: out.length + 1, unbroken: true });
+      return out;
+    })();
     innings.push({
+      partnerships,
       battingTeamId: battingTeam.id, inningsNumber: already + 1,
       runsScored: stat(battingTeam.statistics, "TOTAL_SCORE") || stat(battingTeam.statistics, "TOTALS"),
       numberOfWicketsFallen: stat(battingTeam.statistics, "TOTAL_OUTS"),
@@ -3181,6 +3226,24 @@ function renderMaidens(d, where, loading) {
   items.forEach((p, i) => box.appendChild(listRow({ no: i + 1, name: p.name, sub: shortGrade(p.grade), fig: String(p.maidens), figSub: p.maidens === 1 ? "maiden" : "maidens", live: p.live })));
   grid.appendChild(box);
 }
+/* Partnerships of HL_MIN_PARTNERSHIP runs or more, biggest first. */
+function renderPartnerships(d, where, loading) {
+  const sum = $("hp-summary"), grid = $("hp-grid");
+  grid.innerHTML = "";
+  if (hl.state === "loading" && !hl.data) { sum.textContent = loading; return; }
+  if (hl.state === "error" && !hl.data) { sum.innerHTML = '<span class="bad" style="margin:0">Could not load the matches. Press Refresh to try again.</span>'; return; }
+  if (!d.round) { sum.innerHTML = "<strong>No matches have been played yet.</strong>"; return; }
+  const items = d.parts || [];
+  sum.innerHTML = where(d) + (items.length ? plural(items.length, "partnership", "partnerships") + " of " + HL_MIN_PARTNERSHIP + " or more." : "no partnerships of " + HL_MIN_PARTNERSHIP + " or more.");
+  if (items.some(p => p.live)) sum.innerHTML += '<span class="bad">Figures marked "Not finished" are from matches still in progress and may change.</span>';
+  if (d.failed > 0) sum.innerHTML += '<span class="bad">Could not check ' + plural(d.failed, "player", "players") + ", so they may be missing. Press Refresh to try again.</span>";
+  const box = document.createElement("section");
+  box.className = "lst"; box.setAttribute("aria-label", "Partnerships");
+  box.innerHTML = '<div class="lst-h">' + HL_MIN_PARTNERSHIP + '+ partnerships<span class="n">' + items.length + "</span></div>";
+  if (!items.length) box.appendChild(listRow({ cls: "empty-row", text: "Nobody batted together for " + HL_MIN_PARTNERSHIP + " or more." }));
+  items.forEach((p, i) => box.appendChild(listRow({ no: i + 1, name: p.names[0] + " and " + p.names[1], sub: shortGrade(p.grade) + ", " + (p.unbroken ? "unbroken last wicket" : ordinal(p.wicket) + " wicket"), fig: String(p.runs), figSub: "runs", live: p.live })));
+  grid.appendChild(box);
+}
 function hlJuniorDates(r) { return fmtDay(r.first) + (r.last !== r.first ? " to " + fmtDay(r.last) : ""); }
 function renderHL() {
   const d = hl.data || {};
@@ -3192,6 +3255,7 @@ function renderHL() {
   renderHLSection({ sum: "hw5-summary", grid: "hw5-grid", min: 5, data: d.senior, loading: sl, where: sw, kind: HL_BOWL, title: "5+ wickets" });
   renderHLSection({ sum: "hw-summary", grid: "hw-grid", min: HL_MIN_WKTS, max: HL_MIN_WKTS, data: d.senior, loading: sl, where: sw, kind: HL_BOWL, title: "4 wickets" });
   renderMaidens(d.senior || {}, sw, sl);
+  renderPartnerships(d.senior || {}, sw, sl);
   renderHLSection({ sum: "hj-summary", grid: "hj-grid", min: HL_JUNIOR_MIN_RUNS, data: d.junior, loading: jl, where: jw, kind: HL_BAT });
   renderHLSection({ sum: "hwj-summary", grid: "hwj-grid", min: HL_JUNIOR_MIN_WKTS, data: d.junior, loading: jl, where: jw, kind: HL_BOWL });
 }
@@ -3265,6 +3329,12 @@ function hlText(view) {
       out.push("Parramatta Cheetahs senior most maiden overs" + st, "");
       if (!top) out.push("No maiden overs were bowled.");
       all.filter(p => p.maidens === top).forEach((p, i) => out.push((i + 1) + ". " + p.name + " (" + shortGrade(p.grade) + ") - " + plural(top, "maiden", "maidens") + (p.live ? " (not finished)" : "")));
+      out.push("");
+    }
+    if (d.senior.round) {
+      out.push("Parramatta Cheetahs senior " + HL_MIN_PARTNERSHIP + "+ partnerships" + st, "");
+      if (!(d.senior.parts || []).length) out.push("Nobody batted together for " + HL_MIN_PARTNERSHIP + " or more.");
+      (d.senior.parts || []).forEach((p, i) => out.push((i + 1) + ". " + p.names[0] + " and " + p.names[1] + " (" + shortGrade(p.grade) + ") - " + p.runs + " runs" + (p.unbroken ? " (unbroken)" : "") + (p.live ? " (not finished)" : "")));
       out.push("");
     }
     const dd = hlDeb.data;
